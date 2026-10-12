@@ -16,7 +16,7 @@ import {
   installedGateway,
   isSecret,
   logTitle,
-  namespaceCandidates,
+  namespaceSuggestions,
   planSearch,
   searchHits,
   supportsMetrics,
@@ -1999,21 +1999,29 @@ export function SearchModal({ kubi }: { kubi: Kubi }) {
   const hits = searchHits(query, kubi.customResources, kubi.namespaces);
   const plan = planSearch(query, kubi.customResources, kubi.namespaces);
   const preferred = kubi.activeTab?.namespace ?? null;
-  const candidates = plan.namespaceSlot
-    ? namespaceCandidates(plan.namespaceFragment ?? "", kubi.namespaces, preferred)
-    : [];
+  const suggestions = namespaceSuggestions(plan, kubi.namespaces, preferred);
+  // The namespace the query points at: resolved outright, or the highlighted
+  // suggestion while the fragment still matches several.
+  const active =
+    plan.namespace ??
+    (plan.namespaceSlot && suggestions.length > 0 ? suggestions[step % suggestions.length] : null);
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
     input.current?.focus();
   }, []);
   const safe = hits.length === 0 ? 0 : cursor % hits.length;
-  const picked = plan.namespaceSlot ? (candidates[step % candidates.length] ?? null) : null;
   const open = (hit: SearchHit) => {
-    // An open namespace position resolves to the highlighted suggestion; with no
-    // namespace in play the view keeps the namespace it opens from.
-    const namespace = viewAcceptsNamespace(hit.view) ? (hit.namespace ?? picked) : null;
+    // The namespace shown under the field wins; with none in play the view keeps
+    // the namespace it opens from.
+    const namespace = viewAcceptsNamespace(hit.view) ? (hit.namespace ?? active) : null;
     kubi.openView(hit.view, namespace ?? undefined);
     kubi.setSearchOpen(false);
+  };
+  /** Hits carry the typed fragment; show the namespace Enter would use instead. */
+  const hintOf = (hit: SearchHit): string => {
+    if (active == null || !viewAcceptsNamespace(hit.view)) return hit.hint;
+    const group = hit.hint.split(" · ")[0];
+    return group === "" ? active : `${group} · ${active}`;
   };
   const complete = () => {
     const next = completeSearch(
@@ -2072,19 +2080,15 @@ export function SearchModal({ kubi }: { kubi: Kubi }) {
             if (event.key === "Enter" && hits[safe]) open(hits[safe]);
           }}
         />
-        {candidates.length > 0 ? (
+        {suggestions.length > 0 && hits.some((hit) => viewAcceptsNamespace(hit.view)) ? (
           <div className="ns-hints">
-            <span className="muted">Namespace ⇥</span>
-            {candidates.slice(0, 8).map((name, index) => (
-              <button
-                key={name}
-                className={index === step % candidates.length ? "on" : ""}
-                onClick={() => chooseNamespace(name)}
-              >
+            <span className="muted">{plan.namespaceSlot ? "Namespace ⇥" : "Namespace"}</span>
+            {suggestions.slice(0, 8).map((name) => (
+              <button key={name} className={name === active ? "on" : ""} onClick={() => chooseNamespace(name)}>
                 {name}
               </button>
             ))}
-            {candidates.length > 8 ? <span className="muted">+{candidates.length - 8}</span> : null}
+            {suggestions.length > 8 ? <span className="muted">+{suggestions.length - 8}</span> : null}
           </div>
         ) : null}
         <div className="search-list">
@@ -2095,7 +2099,7 @@ export function SearchModal({ kubi }: { kubi: Kubi }) {
               onClick={() => open(hit)}
             >
               <span>{hit.label}</span>
-              <span className="muted">{hit.hint}</span>
+              <span className="muted">{hintOf(hit)}</span>
             </button>
           ))}
         </div>

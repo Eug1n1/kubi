@@ -390,6 +390,23 @@ export function namespaceCandidates(
 }
 
 /**
+ * Namespaces offered under the search field. Shown whenever the query sits at
+ * the namespace position — including a fragment that already resolved to one
+ * namespace, so the target is visible before Enter.
+ */
+export function namespaceSuggestions(
+  plan: SearchPlan,
+  namespaces: string[],
+  preferred?: string | null,
+): string[] {
+  if (plan.namespaceFragment == null) return [];
+  const matches = namespaceCandidates(plan.namespaceFragment, namespaces, preferred);
+  // An explicit `-n` that matches nothing is still where the query points.
+  if (matches.length === 0 && plan.namespace != null) return [plan.namespace];
+  return matches;
+}
+
+/**
  * Tab completion. `selected` is the label of the highlighted list entry, so a
  * resource follows the cursor rather than the first hit. At the namespace
  * position it walks through `namespaceCandidates`, one entry per Tab.
