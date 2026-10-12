@@ -1,12 +1,38 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { createPortal } from "react-dom";
 import { readGroupsFile, writeGroupsFile } from "./api";
 import { clusterColor, initials } from "./format";
 import type { ContextGroup, ContextInfo } from "./types";
 import type { Kubi } from "./useKubi";
 
+/** Gap between two context rows, matching `.items { gap }` in the stylesheet. */
+const ROW_GAP = 2;
+/** Pixels of movement before a press turns into a drag. */
+const DRAG_SLOP = 4;
+
+export type ContextLayout = {
+  groups: ContextGroup[];
+  /** Order of the contexts that are in no folder. */
+  loose: string[];
+};
+
 export function newGroupId(): string {
   return `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function strings(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  for (const value of input) {
+    if (typeof value === "string" && value !== "") seen.add(value);
+  }
+  return [...seen];
 }
 
 /**
@@ -14,18 +40,18 @@ export function newGroupId(): string {
  * even when the current kubeconfig does not have them, so switching kubeconfigs
  * back and forth is lossless.
  */
-export function parseGroups(text: string | null): ContextGroup[] {
-  if (text == null || text.trim() === "") return [];
+export function parseLayout(text: string | null): ContextLayout {
+  if (text == null || text.trim() === "") return { groups: [], loose: [] };
   let raw: unknown;
   try {
     raw = JSON.parse(text);
   } catch {
-    return [];
+    return { groups: [], loose: [] };
   }
-  const list = Array.isArray(raw)
-    ? raw
-    : raw != null && typeof raw === "object" && Array.isArray((raw as { groups?: unknown }).groups)
-      ? ((raw as { groups: unknown[] }).groups)
+  const root: unknown = Array.isArray(raw) ? { groups: raw } : raw;
+  const list =
+    root != null && typeof root === "object" && Array.isArray((root as { groups?: unknown }).groups)
+      ? ((root as { groups: unknown[] }).groups)
       : [];
   const groups: ContextGroup[] = [];
   const names = new Set<string>();
@@ -35,56 +61,29 @@ export function parseGroups(text: string | null): ContextGroup[] {
     const name = typeof item.name === "string" ? item.name.trim() : "";
     if (name === "" || names.has(name)) continue;
     names.add(name);
-    const contexts = Array.isArray(item.contexts)
-      ? [...new Set(item.contexts.filter((value): value is string => typeof value === "string" && value !== ""))]
-      : [];
     groups.push({
       id: typeof item.id === "string" && item.id !== "" ? item.id : newGroupId(),
       name,
-      contexts,
+      contexts: strings(item.contexts),
     });
   }
-  return groups;
+  const loose =
+    root != null && typeof root === "object" ? strings((root as { loose?: unknown }).loose) : [];
+  return { groups, loose };
 }
 
-export function serializeGroups(groups: ContextGroup[]): string {
-  return JSON.stringify({ version: 1, groups }, null, 2);
-}
-
-/** Moves a context into `groupId`, or out of every folder when it is null. */
-export function assignContext(
-  groups: ContextGroup[],
-  context: string,
-  groupId: string | null,
-): ContextGroup[] {
-  const stripped = groups.map((group) => ({
-    ...group,
-    contexts: group.contexts.filter((name) => name !== context),
-  }));
-  if (groupId == null) return stripped;
-  return stripped.map((group) =>
-    group.id === groupId ? { ...group, contexts: [...group.contexts, context] } : group,
-  );
-}
-
-export function dropGroup(groups: ContextGroup[], id: string): ContextGroup[] {
-  return groups.filter((group) => group.id !== id);
-}
-
-export function renameGroup(groups: ContextGroup[], id: string, name: string): ContextGroup[] {
-  const trimmed = name.trim();
-  if (trimmed === "") return groups;
-  return groups.map((group) => (group.id === id ? { ...group, name: trimmed } : group));
+export function serializeLayout(layout: ContextLayout): string {
+  return JSON.stringify({ version: 2, groups: layout.groups, loose: layout.loose }, null, 2);
 }
 
 /** Folder rows with their live contexts, plus the contexts no folder claims. */
 export function partitionContexts(
-  groups: ContextGroup[],
+  layout: ContextLayout,
   contexts: ContextInfo[],
 ): { rows: { group: ContextGroup; items: ContextInfo[] }[]; loose: ContextInfo[] } {
   const byName = new Map(contexts.map((item) => [item.name, item]));
   const claimed = new Set<string>();
-  const rows = groups.map((group) => {
+  const rows = layout.groups.map((group) => {
     const items: ContextInfo[] = [];
     for (const name of group.contexts) {
       const item = byName.get(name);
@@ -94,41 +93,171 @@ export function partitionContexts(
     }
     return { group, items };
   });
-  return { rows, loose: contexts.filter((item) => !claimed.has(item.name)) };
+  const loose: ContextInfo[] = [];
+  const seen = new Set(claimed);
+  for (const name of [...layout.loose, ...contexts.map((item) => item.name)]) {
+    const item = byName.get(name);
+    if (item == null || seen.has(name)) continue;
+    seen.add(name);
+    loose.push(item);
+  }
+  return { rows, loose };
 }
 
-type Drop = { token: string; zone: string | null };
+/** Materialises the visible order, keeping names the kubeconfig does not have. */
+export function normalizeLayout(layout: ContextLayout, contexts: ContextInfo[]): ContextLayout {
+  const { rows, loose } = partitionContexts(layout, contexts);
+  const known = new Set([...rows.flatMap((row) => row.group.contexts), ...loose.map((item) => item.name)]);
+  const strays = layout.loose.filter((name) => !known.has(name));
+  return { groups: layout.groups, loose: [...loose.map((item) => item.name), ...strays] };
+}
 
-type DragState = {
+export function renameGroup(groups: ContextGroup[], id: string, name: string): ContextGroup[] {
+  const trimmed = name.trim();
+  if (trimmed === "") return groups;
+  return groups.map((group) => (group.id === id ? { ...group, name: trimmed } : group));
+}
+
+export function dropGroup(groups: ContextGroup[], id: string): ContextGroup[] {
+  return groups.filter((group) => group.id !== id);
+}
+
+/**
+ * Moves a context into `zone` (`""` = no folder) at `index`, or to the end when
+ * the index is null. Names it leaves behind keep their relative order.
+ */
+export function moveContext(
+  layout: ContextLayout,
+  token: string,
+  zone: string | null,
+  index: number | null,
+): ContextLayout {
+  const groups = layout.groups.map((group) => ({
+    ...group,
+    contexts: group.contexts.filter((name) => name !== token),
+  }));
+  const loose = layout.loose.filter((name) => name !== token);
+  const insert = (list: string[]): string[] => {
+    const at = index == null ? list.length : Math.max(0, Math.min(index, list.length));
+    return [...list.slice(0, at), token, ...list.slice(at)];
+  };
+  if (zone == null) return { groups, loose };
+  if (zone === "") return { groups, loose: insert(loose) };
+  return {
+    groups: groups.map((group) =>
+      group.id === zone ? { ...group, contexts: insert(group.contexts) } : group,
+    ),
+    loose,
+  };
+}
+
+type ZoneRows = {
+  zone: string;
+  step: number;
+  rows: { name: string; index: number; mid: number; top: number; height: number }[];
+};
+
+type DragLive = {
   token: string;
-  x: number;
-  y: number;
+  fromZone: string;
+  fromIndex: number;
+  /** Row pitch of the source list, used for the shift animation. */
+  step: number;
+  /** Target zone, `""` for the ungrouped area, null when nowhere. */
+  zone: string | null;
+  /** Insertion index in the target list once the dragged row is removed. */
+  index: number | null;
   left: number;
   top: number;
   width: number;
   height: number;
   dx: number;
   dy: number;
-  moved: boolean;
-  /** `null` = nowhere, `""` = the ungrouped area, otherwise a folder id. */
-  zone: string | null;
 };
 
-/** Pointer-based drag: HTML5 drag events are unreliable inside the webview. */
+type DragDrop = { token: string; zone: string; index: number | null };
+
+function readZones(): ZoneRows[] {
+  return [...document.querySelectorAll<HTMLElement>("[data-list]")].map((list) => {
+    const rows = [...list.querySelectorAll<HTMLElement>("[data-ctx]")].map((row, index) => {
+      const rect = row.getBoundingClientRect();
+      return {
+        name: row.getAttribute("data-ctx") ?? "",
+        index,
+        mid: rect.top + rect.height / 2,
+        top: rect.top,
+        height: rect.height,
+      };
+    });
+    return {
+      zone: list.getAttribute("data-list") ?? "",
+      rows,
+      step: rows.length > 1 ? rows[1].top - rows[0].top : (rows[0]?.height ?? 0) + ROW_GAP,
+    };
+  });
+}
+
+function shiftFor(index: number, from: number, over: number, unit: number): number {
+  if (index === from) return 0;
+  if (from < over && index > from && index <= over) return -unit;
+  if (over < from && index < from && index >= over) return unit;
+  return 0;
+}
+
+/** Rows make room while dragging; the row itself rides along as a ghost. */
+export function rowMotion(
+  zone: string,
+  index: number,
+  name: string,
+  live: DragLive | null,
+): { className: string; style?: CSSProperties } {
+  if (live == null) return { className: "" };
+  const within = live.zone === live.fromZone;
+  if (live.token === name) {
+    if (!within) return { className: "held" };
+    return { className: "dragging", style: { visibility: "hidden" } };
+  }
+  if (!within || live.zone !== zone || live.index == null) return { className: "" };
+  const shift = shiftFor(index, live.fromIndex, live.index, live.step);
+  if (shift === 0) return { className: "" };
+  return { className: "shift", style: { transform: `translateY(${shift}px)` } };
+}
+
+/** Pointer drag: HTML5 drag events are unreliable inside the webview. */
 function useContextDrag() {
-  const drag = useRef<DragState | null>(null);
+  const drag = useRef<{
+    token: string;
+    fromZone: string;
+    fromIndex: number;
+    x: number;
+    y: number;
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    dx: number;
+    dy: number;
+    moved: boolean;
+    zone: string | null;
+    index: number | null;
+    zones: ZoneRows[];
+  } | null>(null);
   const skipClick = useRef(false);
-  const [live, setLive] = useState<Omit<DragState, "moved" | "x" | "y"> | null>(null);
+  const [live, setLive] = useState<DragLive | null>(null);
+
   return {
     live,
-    zone: live?.zone ?? null,
     dragging: live != null,
-    down(token: string, event: ReactPointerEvent<HTMLElement>) {
+    zone: live?.zone ?? null,
+    down(token: string, zone: string, index: number, event: ReactPointerEvent<HTMLElement>) {
       if (event.button !== 0) return;
       const rect = event.currentTarget.getBoundingClientRect();
+      const zones = readZones();
       skipClick.current = false;
       drag.current = {
         token,
+        fromZone: zone,
+        fromIndex: index,
         x: event.clientX,
         y: event.clientY,
         left: rect.left,
@@ -139,6 +268,8 @@ function useContextDrag() {
         dy: 0,
         moved: false,
         zone: null,
+        index: null,
+        zones,
       };
       event.currentTarget.setPointerCapture(event.pointerId);
     },
@@ -148,30 +279,46 @@ function useContextDrag() {
       state.dx = event.clientX - state.x;
       state.dy = event.clientY - state.y;
       if (!state.moved) {
-        if (Math.hypot(state.dx, state.dy) <= 4) return;
+        if (Math.hypot(state.dx, state.dy) <= DRAG_SLOP) return;
         state.moved = true;
       }
       const under = document.elementFromPoint(event.clientX, event.clientY);
       const host = under instanceof Element ? under.closest("[data-drop]") : null;
-      state.zone = host?.getAttribute("data-drop") ?? null;
+      const zone = host?.getAttribute("data-drop") ?? null;
+      const slots = state.zones.find((entry) => entry.zone === zone);
+      let index: number | null = null;
+      if (slots != null) {
+        // Count the rows above the pointer, then drop the dragged row from the count.
+        let raw = slots.rows.filter((row) => row.mid < event.clientY).length;
+        if (zone === state.fromZone && raw > state.fromIndex) raw -= 1;
+        index = raw;
+      }
+      state.zone = zone;
+      state.index = index;
+      const source = state.zones.find((entry) => entry.zone === state.fromZone);
       setLive({
         token: state.token,
+        fromZone: state.fromZone,
+        fromIndex: state.fromIndex,
+        step: source?.step ?? state.height + ROW_GAP,
+        zone,
+        index,
         left: state.left,
         top: state.top,
         width: state.width,
         height: state.height,
         dx: state.dx,
         dy: state.dy,
-        zone: state.zone,
       });
     },
-    up(): Drop | null {
+    up(): DragDrop | null {
       const state = drag.current;
       drag.current = null;
       setLive(null);
       if (state == null || !state.moved) return null;
       skipClick.current = true;
-      return state.zone == null ? null : { token: state.token, zone: state.zone };
+      if (state.zone == null) return null;
+      return { token: state.token, zone: state.zone, index: state.index };
     },
     cancel() {
       drag.current = null;
@@ -187,7 +334,7 @@ function useContextDrag() {
 }
 
 export function ContextRail({ kubi }: { kubi: Kubi }) {
-  const [groups, setGroups] = useState<ContextGroup[]>([]);
+  const [layout, setLayout] = useState<ContextLayout>({ groups: [], loose: [] });
   const [draft, setDraft] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
   const [closed, setClosed] = useState<string[]>([]);
@@ -198,7 +345,7 @@ export function ContextRail({ kubi }: { kubi: Kubi }) {
     let stop = false;
     void readGroupsFile()
       .then((text) => {
-        if (!stop) setGroups(parseGroups(text));
+        if (!stop) setLayout(parseLayout(text));
       })
       .catch(() => {
         if (!stop) setNote("Folders could not be read");
@@ -208,9 +355,10 @@ export function ContextRail({ kubi }: { kubi: Kubi }) {
     };
   }, []);
 
-  function commit(next: ContextGroup[]) {
-    setGroups(next);
-    void writeGroupsFile(serializeGroups(next)).catch(() => setNote("Folders could not be saved"));
+  function commit(next: ContextLayout) {
+    const tidy = normalizeLayout(next, kubi.contexts);
+    setLayout(tidy);
+    void writeGroupsFile(serializeLayout(tidy)).catch(() => setNote("Folders could not be saved"));
   }
 
   function addFolder(name: string) {
@@ -219,34 +367,30 @@ export function ContextRail({ kubi }: { kubi: Kubi }) {
       setDraft(null);
       return;
     }
-    if (groups.some((group) => group.name === trimmed)) {
+    if (layout.groups.some((group) => group.name === trimmed)) {
       setNote(`"${trimmed}" already exists`);
       return;
     }
     setNote(null);
-    commit([...groups, { id: newGroupId(), name: trimmed, contexts: [] }]);
+    commit({ ...layout, groups: [...layout.groups, { id: newGroupId(), name: trimmed, contexts: [] }] });
     setDraft(null);
   }
 
   function finishRename() {
     if (renaming == null) return;
     const trimmed = renaming.value.trim();
-    if (trimmed === "" || groups.some((group) => group.name === trimmed && group.id !== renaming.id)) {
+    if (trimmed === "" || layout.groups.some((group) => group.name === trimmed && group.id !== renaming.id)) {
       setNote(trimmed === "" ? null : `"${trimmed}" already exists`);
       setRenaming(null);
       return;
     }
     setNote(null);
-    commit(renameGroup(groups, renaming.id, trimmed));
+    commit({ ...layout, groups: renameGroup(layout.groups, renaming.id, trimmed) });
     setRenaming(null);
   }
 
-  function drop(token: string, zone: string | null) {
-    commit(assignContext(groups, token, zone === "" || zone == null ? null : zone));
-  }
-
-  const { rows, loose } = partitionContexts(groups, kubi.contexts);
-  const blocks = [...rows.filter((row) => row.items.length > 0).map((row) => row.items)];
+  const { rows, loose } = partitionContexts(layout, kubi.contexts);
+  const blocks = rows.filter((row) => row.items.length > 0).map((row) => row.items);
   if (loose.length > 0) blocks.push(loose);
   const strip = blocks.flat();
 
@@ -264,19 +408,22 @@ export function ContextRail({ kubi }: { kubi: Kubi }) {
     );
   }
 
-  function contextRow(item: ContextInfo) {
-    const active = item.name === kubi.context;
-    const held = drag.live?.token === item.name;
+  function contextRow(item: ContextInfo, zone: string, index: number) {
+    const motion = rowMotion(zone, index, item.name, drag.live);
     return (
       <button
         key={item.name}
-        className={["ctx", active ? "active" : "", held ? "held" : ""].filter(Boolean).join(" ")}
+        data-ctx={item.name}
+        className={["ctx", item.name === kubi.context ? "active" : "", motion.className]
+          .filter(Boolean)
+          .join(" ")}
+        style={motion.style}
         title={item.cluster ? `${item.name}\n${item.cluster}` : item.name}
-        onPointerDown={(event) => drag.down(item.name, event)}
+        onPointerDown={(event) => drag.down(item.name, zone, index, event)}
         onPointerMove={drag.move}
         onPointerUp={() => {
-          const drop2 = drag.up();
-          if (drop2 != null) drop(drop2.token, drop2.zone);
+          const drop = drag.up();
+          if (drop != null) commit(moveContext(layout, drop.token, drop.zone, drop.index));
         }}
         onPointerCancel={drag.cancel}
         onClick={(event) => {
@@ -382,14 +529,24 @@ export function ContextRail({ kubi }: { kubi: Kubi }) {
                       className="icon"
                       title="Delete folder"
                       aria-label="Delete folder"
-                      onClick={() => commit(dropGroup(groups, row.group.id))}
+                      onClick={() =>
+                        commit({ ...layout, groups: dropGroup(layout.groups, row.group.id) })
+                      }
                     >
                       <TrashIcon />
                     </button>
                   </div>
                   {shut ? null : (
-                    <div className={drag.zone === row.group.id ? "items drop" : "items"} data-drop={row.group.id}>
-                      {row.items.length === 0 ? <p className="hint">Drop contexts here</p> : row.items.map(contextRow)}
+                    <div
+                      className={drag.zone === row.group.id ? "items drop" : "items"}
+                      data-drop={row.group.id}
+                      data-list={row.group.id}
+                    >
+                      {row.items.length === 0 ? (
+                        <p className="hint">Drop contexts here</p>
+                      ) : (
+                        row.items.map((item, index) => contextRow(item, row.group.id, index))
+                      )}
                     </div>
                   )}
                 </section>
@@ -403,8 +560,12 @@ export function ContextRail({ kubi }: { kubi: Kubi }) {
                 </span>
                 <span className="muted">{loose.length}</span>
               </div>
-              <div className={drag.zone === "" ? "items drop" : "items"} data-drop="">
-                {loose.length === 0 ? <p className="hint">Drop here to ungroup</p> : loose.map(contextRow)}
+              <div className={drag.zone === "" ? "items drop" : "items"} data-drop="" data-list="">
+                {loose.length === 0 ? (
+                  <p className="hint">Drop here to ungroup</p>
+                ) : (
+                  loose.map((item, index) => contextRow(item, "", index))
+                )}
               </div>
             </section>
           </div>
@@ -439,10 +600,11 @@ export function ContextRail({ kubi }: { kubi: Kubi }) {
             <div
               className="ctx-ghost"
               style={{
-                left: drag.live.left + drag.live.dx,
-                top: drag.live.top + drag.live.dy,
+                left: drag.live.left,
+                top: drag.live.top,
                 width: drag.live.width,
                 height: drag.live.height,
+                transform: `translate(${drag.live.dx}px, ${drag.live.dy}px)`,
               }}
             >
               <i className="strip" style={{ background: clusterColor(drag.live.token) }} />

@@ -243,6 +243,9 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .ctx.active { background: var(--selected); }
 .ctx.held { opacity: 0.4; }
+/* Neighbours slide out of the way while a context is dragged over them. */
+.ctx.shift { transition: transform 160ms ease; }
+.ctx.dragging { pointer-events: none; }
 .hotbar .panel footer {
   flex: none;
   display: flex;
@@ -261,6 +264,7 @@ button:disabled { opacity: 0.5; cursor: default; }
   position: fixed;
   z-index: 60;
   pointer-events: none;
+  will-change: transform;
   display: flex;
   align-items: center;
   padding: 4px 8px 4px 10px;
