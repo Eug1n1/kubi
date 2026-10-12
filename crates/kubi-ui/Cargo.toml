@@ -1,0 +1,11 @@
+[package]
+name = "kubi-ui"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "persistence", "wayland", "wgpu", "x11"] }
+egui_plot = "0.37"
+kubi-core = { workspace = true }
+rfd = "0.15"

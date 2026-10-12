@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/kubi-core", "crates/kubi-ui", "apps/kubi", "apps/desktop/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace.dependencies]
+kubi-core = { path = "crates/kubi-core" }
+kubi-ui = { path = "crates/kubi-ui" }

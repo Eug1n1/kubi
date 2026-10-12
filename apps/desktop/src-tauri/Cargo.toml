@@ -1,0 +1,16 @@
+[package]
+name = "kubi-desktop"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Kubi desktop shell"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+kubi-core = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"

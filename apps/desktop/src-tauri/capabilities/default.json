@@ -1,0 +1,12 @@
+{
+  "identifier": "default",
+  "description": "Kubi window permissions",
+  "windows": ["main", "log-*", "exec-*"],
+  "permissions": [
+    "core:default",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-close",
+    "core:window:allow-set-focus",
+    "dialog:default"
+  ]
+}
