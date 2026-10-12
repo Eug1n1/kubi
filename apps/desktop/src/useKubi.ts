@@ -16,6 +16,7 @@ import type {
   ExecSnapshot,
   ForwardDraft,
   LogSnapshot,
+  ObjectWarning,
   PendingDelete,
   PendingSelect,
   PortForward,
@@ -30,6 +31,11 @@ import { eventKey, sameTarget, sameView, watchOf } from "./types";
 import { canExec, canForward, canLogs, canRestart, logTitle, viewTitle } from "./catalog";
 
 type HistPoint = { t: number; cpu: number; mem: number };
+
+/** Warning scan throttle: refreshes at most this often while a list is open. */
+const WARNINGS_TTL_MS = 8_000;
+/** ...and at least this often, so badges do not go stale. */
+const WARNINGS_REFRESH_MS = 20_000;
 
 type Session = {
   context: string | null;
@@ -63,6 +69,8 @@ function blankTab(view: View, namespace: string | null, id: number): Tab {
     namespace,
     data: null,
     dataFor: null,
+    events: null,
+    eventsFor: null,
     observedAt: null,
   };
 }
@@ -141,6 +149,11 @@ export function useKubi() {
   const [metricsNote, setMetricsNote] = useState<string | null>(null);
   const [history, setHistory] = useState<HistPoint[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [warnings, setWarnings] = useState<{ scope: string | null; byUid: Record<string, ObjectWarning> }>({
+    scope: null,
+    byUid: {},
+  });
+  const warningsAt = useRef(0);
   const [createOpen, setCreateOpen] = useState(false);
   const [createYaml, setCreateYaml] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
@@ -552,6 +565,7 @@ export function useKubi() {
     const index = session.current.active;
     if (index == null) return;
     updateTabs((items) => items.map((item, i) => (i === index ? { ...item, detailTab } : item)));
+    if (detailTab === "events") requestEvents(index);
   }
 
   function commitTabs(next: Tab[]) {
@@ -603,6 +617,40 @@ export function useKubi() {
     });
   }
 
+  /**
+   * Loads the events the cluster attached to the selected row. Called as soon
+   * as a row is focused, so warnings surface without opening the Events tab;
+   * older events stay on screen while a refresh is in flight.
+   */
+  function requestEvents(index = session.current.active) {
+    if (index == null) return;
+    const tab = session.current.tabs[index];
+    const row = tab?.rows.find((item) => item.uid === tab.selected);
+    if (!tab || !row) return;
+    updateTabs((items) =>
+      items.map((item, i) =>
+        i === index
+          ? { ...item, events: item.eventsFor === row.uid ? item.events : null, eventsFor: row.uid }
+          : item,
+      ),
+    );
+    void send({ fetchEvents: { namespace: row.namespace, name: row.name, uid: row.uid } });
+  }
+
+  /**
+   * Scans warning events once for the whole list, so rows carry a badge before
+   * anything is selected. Throttled: the watch pushes rows often.
+   */
+  function requestWarnings(force = false) {
+    const index = session.current.active;
+    const tab = index == null ? null : session.current.tabs[index];
+    if (!tab) return;
+    const now = Date.now();
+    if (!force && now - warningsAt.current < WARNINGS_TTL_MS) return;
+    warningsAt.current = now;
+    void send({ fetchWarnings: { namespace: tab.namespace } });
+  }
+
   function activate(index: number) {
     const tab = session.current.tabs[index];
     if (!tab) return;
@@ -613,6 +661,7 @@ export function useKubi() {
     updateTabs((items) => items.map((item, i) => (i === index ? { ...item, waiting: true } : item)));
     void send({ setNamespace: { namespace: tab.namespace } });
     void send({ watch: { target } });
+    if (tab.detailTab === "events") requestEvents(index);
   }
 
   function showHome(next: Home) {
@@ -645,6 +694,8 @@ export function useKubi() {
               yamlFor: null,
               data: null,
               dataFor: null,
+              events: null,
+              eventsFor: null,
               waiting: true,
             }
           : item,
@@ -718,7 +769,15 @@ export function useKubi() {
               selection,
               anchor,
               ...(focusChanged
-                ? { yaml: null, yamlFor: null, data: null, dataFor: null, detailTab: "overview" as const }
+                ? {
+                    yaml: null,
+                    yamlFor: null,
+                    data: null,
+                    dataFor: null,
+                    events: null,
+                    eventsFor: null,
+                    detailTab: "overview" as const,
+                  }
                 : {}),
             }
           : item,
@@ -727,6 +786,7 @@ export function useKubi() {
     if (focusChanged) {
       setHistory([]);
       requestYaml(index);
+      requestEvents(index);
     }
   }
 
@@ -898,7 +958,10 @@ export function useKubi() {
       const index = session.current.active;
       const tab = index == null ? undefined : session.current.tabs[index];
       const watching = tab ? watchOf(tab.view) : null;
-      if (watching && sameTarget(watching, target)) endRefresh();
+      if (watching && sameTarget(watching, target)) {
+        endRefresh();
+        requestWarnings();
+      }
       return;
     }
     if (key === "usage" && "usage" in event) {
@@ -943,6 +1006,19 @@ export function useKubi() {
             : tab,
         ),
       );
+      return;
+    }
+    if (key === "objectEvents" && "objectEvents" in event) {
+      const { uid, events } = event.objectEvents;
+      updateTabs((items) =>
+        items.map((tab) => (tab.eventsFor === uid ? { ...tab, events } : tab)),
+      );
+      return;
+    }
+    if (key === "warnings" && "warnings" in event) {
+      const byUid: Record<string, ObjectWarning> = {};
+      for (const item of event.warnings.objects) byUid[item.uid] = item;
+      setWarnings({ scope: event.warnings.namespace, byUid });
       return;
     }
     if (key === "applyResult" && "applyResult" in event) {
@@ -1210,6 +1286,15 @@ export function useKubi() {
   }, [searchOpen]);
 
   const activeTab = active == null ? null : (tabs[active] ?? null);
+  const activeNamespace = activeTab?.namespace ?? null;
+  const scopeWarnings = warnings.scope === activeNamespace ? warnings.byUid : null;
+
+  useEffect(() => {
+    if (active == null || !context) return;
+    requestWarnings(true);
+    const id = window.setInterval(() => requestWarnings(true), WARNINGS_REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [active, context, activeNamespace]);
 
   return {
     contexts,
@@ -1521,6 +1606,7 @@ export function useKubi() {
       return tab?.pane === "exec" ? tab.text : "";
     },
     setSearchOpen,
+    warning: (uid: string) => scopeWarnings?.[uid] ?? null,
     openNamed: (target: CrTarget, namespace: string, name: string) => {
       const watch: WatchTarget = { custom: target };
       session.current.pending = { target: watch, namespace, name };

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Kubi } from "./useKubi";
-import type { ArgoApp, DataEntry, ResourceKind, ResourceRow } from "./types";
+import type { ArgoApp, DataEntry, EventInfo, ObjectWarning, ResourceKind, ResourceRow } from "./types";
 import {
   NAV,
   TITLES,
@@ -607,12 +607,16 @@ function ObjectTable({ kubi }: { kubi: Kubi }) {
                 kubi.openMenu(event.clientX, event.clientY, row.uid);
               }}
             >
-              {cols.map((col) => (
-                <td key={col.title} style={{ minWidth: col.width, color: col.colored ? tone(row.tone) : undefined }}>
-                  {col.colored ? <i className="dot" style={{ background: tone(row.tone) }} /> : null}
-                  {fieldText(row, col.field, liveAge(row.ageSecs, tab.observedAt, kubi.now))}
-                </td>
-              ))}
+              {cols.map((col) => {
+                const warning = col.field === "name" ? kubi.warning(row.uid) : null;
+                return (
+                  <td key={col.title} style={{ minWidth: col.width, color: col.colored ? tone(row.tone) : undefined }}>
+                    {col.colored ? <i className="dot" style={{ background: tone(row.tone) }} /> : null}
+                    {warning ? <WarningMark warning={warning} /> : null}
+                    {fieldText(row, col.field, liveAge(row.ageSecs, tab.observedAt, kubi.now))}
+                  </td>
+                );
+              })}
             </tr>
           ))}
         </tbody>
@@ -628,12 +632,35 @@ function tone(value: ResourceRow["tone"]): string {
   return "var(--muted)";
 }
 
+/** Marks a row whose object has warning events, without opening it. */
+function WarningMark({ warning }: { warning: ObjectWarning }) {
+  const label = `${warning.count} warning event${warning.count === 1 ? "" : "s"}: ${warning.reason}`;
+  return (
+    <span className="warn-mark" title={label} aria-label={label} role="img">
+      <WarnIcon />
+    </span>
+  );
+}
+
+function WarnIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <path d="M8 2.4 14.2 13H1.8z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+      <path d="M8 6.3v3.1" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M8 11.1h.01" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function Detail({ kubi, width, onWidth }: { kubi: Kubi; width: number; onWidth: (width: number) => void }) {
   const tab = kubi.activeTab;
   const row = tab?.rows.find((item) => item.uid === tab.selected);
   if (!tab || !row) return null;
   const kind = tab.view.kind === "resource" ? tab.view.resource : null;
   const dragging = useRef<{ x: number; width: number } | null>(null);
+  // Events load with the selection, so warnings are on hand before the tab is opened.
+  const events = tab.eventsFor === row.uid ? tab.events : null;
+  const warnings = (events ?? []).filter((event) => event.kind === "Warning");
   return (
     <aside className="detail" style={{ width }}>
       <button
@@ -688,6 +715,14 @@ export function Detail({ kubi, width, onWidth }: { kubi: Kubi; width: number; on
         <button className={tab.detailTab === "yaml" ? "active" : ""} onClick={() => kubi.setDetailTab("yaml")}>
           YAML
         </button>
+        <button className={tab.detailTab === "events" ? "active" : ""} onClick={() => kubi.setDetailTab("events")}>
+          Events
+          {warnings.length > 0 ? (
+            <span className="badge warn" title={`${warnings.length} warning events`}>
+              {warnings.length}
+            </span>
+          ) : null}
+        </button>
         {kind && supportsMetrics(kind) ? (
           <button className={tab.detailTab === "metrics" ? "active" : ""} onClick={() => kubi.setDetailTab("metrics")}>
             Metrics
@@ -706,6 +741,8 @@ export function Detail({ kubi, width, onWidth }: { kubi: Kubi; width: number; on
             kind={kind}
             title={viewTitle(tab.view)}
             ageSecs={liveAge(row.ageSecs, tab.observedAt, kubi.now)}
+            warnings={warnings}
+            onEvents={warnings.length > 0 ? () => kubi.setDetailTab("events") : undefined}
             onServicePort={
               kind === "services" ? (port) => kubi.forwardServicePort(row.namespace, row.name, port) : undefined
             }
@@ -716,6 +753,9 @@ export function Detail({ kubi, width, onWidth }: { kubi: Kubi; width: number; on
         ) : null}
         {tab.detailTab === "data" ? (
           <DataTab kubi={kubi} secret={kind != null && isSecret(kind)} ready={tab.dataFor === tab.selected} entries={tab.data} />
+        ) : null}
+        {tab.detailTab === "events" ? (
+          <EventsTab ready={tab.eventsFor === tab.selected} events={tab.events} />
         ) : null}
         {tab.detailTab === "metrics" ? <Metrics kubi={kubi} row={row} /> : null}
       </div>
@@ -1364,17 +1404,37 @@ function OverviewTab({
   kind,
   title,
   ageSecs,
+  warnings,
+  onEvents,
   onServicePort,
 }: {
   row: ResourceRow;
   kind: ResourceKind | null;
   title: string;
   ageSecs: number;
+  warnings: EventInfo[];
+  onEvents?: () => void;
   onServicePort?: (port: number) => void;
 }) {
   const facts = resourceFacts(kind, row);
   return (
     <div className="detail-stack">
+      {warnings.length > 0 ? (
+        <section className="card warn-card">
+          <h2>
+            Warnings
+            <span className="badge warn">{warnings.length}</span>
+          </h2>
+          {warnings.slice(0, 3).map((event, index) => (
+            <EventRow event={event} showType={false} key={`${event.reason}-${event.ageSecs ?? "?"}-${index}`} />
+          ))}
+          {onEvents ? (
+            <button className="ghost" onClick={onEvents}>
+              {warnings.length > 3 ? `All ${warnings.length} events` : "Open events"}
+            </button>
+          ) : null}
+        </section>
+      ) : null}
       <section className="card">
         <h2>Summary</h2>
         <Meta label="Status" value={row.status} />
@@ -1856,6 +1916,36 @@ function DataTab({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function EventRow({ event, showType = true }: { event: EventInfo; showType?: boolean }) {
+  return (
+    <div className="event">
+      <div className="event-head">
+        {showType ? (
+          <span className={event.kind === "Warning" ? "type warn" : "type normal"}>{event.kind}</span>
+        ) : null}
+        <span className="key wrap">{event.reason || "—"}</span>
+        {event.count > 1 ? <span className="muted">×{event.count}</span> : null}
+        <span className="spacer" />
+        <span className="muted">{event.ageSecs == null ? "—" : formatAge(event.ageSecs)}</span>
+      </div>
+      <p className="message">{event.message || "—"}</p>
+      {event.source ? <p className="source">{event.source}</p> : null}
+    </div>
+  );
+}
+
+function EventsTab({ ready, events }: { ready: boolean; events: EventInfo[] | null }) {
+  if (!ready || events == null) return <p className="muted">Loading events…</p>;
+  if (events.length === 0) return <p className="muted">No events for this object.</p>;
+  return (
+    <div>
+      {events.map((event, index) => (
+        <EventRow event={event} key={`${event.reason}-${event.ageSecs ?? "?"}-${index}`} />
+      ))}
     </div>
   );
 }

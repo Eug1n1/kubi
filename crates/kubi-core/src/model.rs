@@ -257,6 +257,35 @@ pub struct OverviewWarning {
     pub age_secs: u64,
 }
 
+/// Warning events collected per object, for the badges in the object list.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectWarning {
+    pub uid: String,
+    pub name: String,
+    pub namespace: String,
+    /// Reason of the most recent warning.
+    pub reason: String,
+    /// Every occurrence counted together.
+    pub count: u32,
+    pub age_secs: Option<u64>,
+}
+
+/// One event from the object's own namespace, newest warnings first.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventInfo {
+    /// `Normal` or `Warning`.
+    pub kind: String,
+    pub reason: String,
+    pub message: String,
+    pub count: i32,
+    /// `None` when the cluster reported no usable timestamp.
+    pub age_secs: Option<u64>,
+    /// Reporting controller, when the cluster fills it in.
+    pub source: String,
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArgoApp {
@@ -409,6 +438,14 @@ pub enum Command {
         reveal_secrets: bool,
     },
     FetchOverview,
+    FetchEvents {
+        namespace: String,
+        name: String,
+        uid: String,
+    },
+    FetchWarnings {
+        namespace: Option<String>,
+    },
     RefreshCatalog,
     Delete {
         target: WatchTarget,
@@ -508,6 +545,15 @@ pub enum AppEvent {
     ObjectData {
         uid: String,
         entries: Vec<DataEntry>,
+    },
+    ObjectEvents {
+        uid: String,
+        events: Vec<EventInfo>,
+    },
+    Warnings {
+        /// Namespace the scan covered, `None` for the whole cluster.
+        namespace: Option<String>,
+        objects: Vec<ObjectWarning>,
     },
     ApplyResult {
         error: Option<String>,

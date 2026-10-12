@@ -100,6 +100,29 @@ export type DataEntry = {
   binary: boolean;
 };
 
+/** Warning events of one object, for the badge in the object list. */
+export type ObjectWarning = {
+  uid: string;
+  name: string;
+  namespace: string;
+  /** Reason of the most recent warning. */
+  reason: string;
+  count: number;
+  ageSecs: number | null;
+};
+
+/** One event the cluster attached to the selected object. */
+export type EventInfo = {
+  /** `Normal` or `Warning`. */
+  kind: string;
+  reason: string;
+  message: string;
+  count: number;
+  /** Null when the cluster reported no usable timestamp. */
+  ageSecs: number | null;
+  source: string;
+};
+
 export type OverviewWarning = {
   object: string;
   reason: string;
@@ -172,6 +195,8 @@ export type Command =
   | "loadContexts"
   | "stopWatch"
   | "fetchOverview"
+  | { fetchEvents: { namespace: string; name: string; uid: string } }
+  | { fetchWarnings: { namespace: string | null } }
   | "refreshCatalog"
   | { setKubeconfig: { path: string } }
   | { connect: { context: string } }
@@ -239,6 +264,8 @@ export type AppEvent =
   | { metricsUnavailable: { kind: ResourceKind; message: string } }
   | { yaml: { uid: string; yaml: string } }
   | { objectData: { uid: string; entries: DataEntry[] } }
+  | { objectEvents: { uid: string; events: EventInfo[] } }
+  | { warnings: { namespace: string | null; objects: ObjectWarning[] } }
   | { applyResult: { error: string | null } }
   | { overview: ClusterOverview }
   | {
@@ -282,7 +309,7 @@ export type View =
   | { kind: "resource"; resource: ResourceKind }
   | { kind: "custom"; target: CrTarget };
 
-export type DetailTab = "overview" | "yaml" | "metrics" | "data";
+export type DetailTab = "overview" | "yaml" | "metrics" | "data" | "events";
 
 export type LogSnapshot = {
   kind: ResourceKind;
@@ -373,6 +400,8 @@ export type Tab = {
   namespace: string | null;
   data: DataEntry[] | null;
   dataFor: string | null;
+  events: EventInfo[] | null;
+  eventsFor: string | null;
   observedAt: number | null;
 };
 

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -36,7 +37,8 @@ use tokio_util::sync::CancellationToken;
 use crate::kubeconfig::{contexts_from, load_kubeconfig, namespace_of};
 use crate::model::{
     AppEvent, ArgoApp, ArgoAppSet, ArgoCluster, ArgoOverview, ArgoRepo, ClusterOverview, Command,
-    CrTarget, DataEntry, OverviewWarning, ResourceKind, UsageSample, WatchTarget,
+    CrTarget, DataEntry, EventInfo, ObjectWarning, OverviewWarning, ResourceKind, UsageSample,
+    WatchTarget,
 };
 use crate::quantity::{parse_bytes, parse_cpu_millis};
 use crate::rows::{
@@ -230,6 +232,12 @@ impl Engine {
                 reveal_secrets,
             } => self.spawn_fetch(target, namespace, name, uid, reveal_secrets),
             Command::FetchOverview => self.fetch_overview(),
+            Command::FetchEvents {
+                namespace,
+                name,
+                uid,
+            } => self.spawn_events(namespace, name, uid),
+            Command::FetchWarnings { namespace } => self.spawn_warnings(namespace),
             Command::RefreshCatalog => self.start_catalog(),
             Command::Delete {
                 target,
@@ -941,6 +949,51 @@ impl Engine {
         let events = self.events.clone();
         tokio::spawn(async move {
             load_detail(client, target, namespace, name, uid, reveal_secrets, events).await;
+        });
+    }
+
+    fn spawn_events(&self, namespace: String, name: String, uid: String) {
+        let Some(client) = self.current_client() else {
+            self.emit_error("Not connected to a cluster");
+            return;
+        };
+        let events = self.events.clone();
+        tokio::spawn(async move {
+            match object_events(&client, &namespace, &name, &uid).await {
+                Ok(list) => {
+                    let _ = events.send(AppEvent::ObjectEvents { uid, events: list });
+                }
+                Err(err) => {
+                    let _ = events.send(AppEvent::Error(format!("events {name}: {err}")));
+                }
+            }
+        });
+    }
+
+    /// Scans warning events once for the whole list, so rows can be marked
+    /// before the user opens any of them.
+    fn spawn_warnings(&self, namespace: Option<String>) {
+        let Some(client) = self.current_client() else {
+            self.emit_error("Not connected to a cluster");
+            return;
+        };
+        let events = self.events.clone();
+        tokio::spawn(async move {
+            let api = match namespace.as_deref() {
+                Some(ns) if !ns.is_empty() => Api::<Event>::namespaced(client, ns),
+                _ => Api::<Event>::all(client),
+            };
+            match list_query(api, "", "type=Warning").await {
+                Ok(list) => {
+                    let _ = events.send(AppEvent::Warnings {
+                        namespace,
+                        objects: aggregate_warnings(&list),
+                    });
+                }
+                Err(err) => {
+                    let _ = events.send(AppEvent::Error(format!("warnings: {err}")));
+                }
+            }
         });
     }
 
@@ -2062,6 +2115,150 @@ async fn list_warnings(client: &Client) -> Result<Vec<Event>, String> {
     list_query(Api::<Event>::all(client.clone()), "", "type=Warning").await
 }
 
+/// How many events the detail panel keeps for one object.
+const EVENT_LIMIT: usize = 60;
+
+/// Events the cluster attached to one object, warnings first and newest first
+/// inside a kind. The UID is the precise link; objects without one fall back to
+/// the name selector.
+async fn object_events(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+    uid: &str,
+) -> Result<Vec<EventInfo>, String> {
+    let api = if namespace.is_empty() {
+        Api::<Event>::all(client.clone())
+    } else {
+        Api::<Event>::namespaced(client.clone(), namespace)
+    };
+    let by_name = format!("involvedObject.name={name}");
+    let mut listed = if uid.is_empty() {
+        list_query(api.clone(), "", &by_name).await?
+    } else {
+        let by_uid = format!("involvedObject.uid={uid}");
+        let found = list_query(api.clone(), "", &by_uid).await?;
+        if found.is_empty() {
+            list_query(api, "", &by_name).await?
+        } else {
+            found
+        }
+    };
+    listed.sort_by_key(|event| event_time_age(event));
+    let mut events: Vec<EventInfo> = listed.iter().map(to_event_info).collect();
+    sort_events(&mut events);
+    events.truncate(EVENT_LIMIT);
+    Ok(events)
+}
+
+fn to_event_info(event: &Event) -> EventInfo {
+    EventInfo {
+        kind: event
+            .type_
+            .clone()
+            .unwrap_or_else(|| "Normal".to_string()),
+        reason: event.reason.clone().unwrap_or_default(),
+        message: event.message.clone().unwrap_or_default(),
+        count: event
+            .count
+            .or_else(|| event.series.as_ref().and_then(|series| series.count))
+            .unwrap_or(1)
+            .max(1),
+        age_secs: event_time_age(event),
+        source: event
+            .source
+            .as_ref()
+            .and_then(|source| source.component.clone())
+            .or_else(|| event.reporting_component.clone())
+            .unwrap_or_default(),
+    }
+}
+
+/// Warnings first, then the most recent, then the loudest. Events without a
+/// timestamp sink to the bottom of their kind.
+fn sort_events(events: &mut [EventInfo]) {
+    events.sort_by(|a, b| {
+        (a.kind != "Warning")
+            .cmp(&(b.kind != "Warning"))
+            .then_with(|| {
+                a.age_secs
+                    .unwrap_or(u64::MAX)
+                    .cmp(&b.age_secs.unwrap_or(u64::MAX))
+            })
+            .then_with(|| b.count.cmp(&a.count))
+    });
+}
+
+/// How many objects with warnings the list scan reports.
+const WARNING_OBJECT_LIMIT: usize = 200;
+
+/// Collapses warning events into one entry per involved object. Counts add up
+/// and the newest warning supplies the reason.
+fn aggregate_warnings(events: &[Event]) -> Vec<ObjectWarning> {
+    let mut map: BTreeMap<String, ObjectWarning> = BTreeMap::new();
+    for event in events {
+        let uid = event.involved_object.uid.clone().unwrap_or_default();
+        if uid.is_empty() {
+            continue;
+        }
+        let count = event
+            .count
+            .or_else(|| event.series.as_ref().and_then(|series| series.count))
+            .unwrap_or(1)
+            .max(1) as u32;
+        let age = event_time_age(event);
+        let entry = map.entry(uid.clone()).or_insert_with(|| ObjectWarning {
+            uid,
+            name: event.involved_object.name.clone().unwrap_or_default(),
+            namespace: event.involved_object.namespace.clone().unwrap_or_default(),
+            reason: String::new(),
+            count: 0,
+            age_secs: None,
+        });
+        entry.count = entry.count.saturating_add(count);
+        let newer = match (entry.age_secs, age) {
+            (None, Some(_)) => true,
+            (Some(current), Some(age)) => age < current,
+            (None, None) => entry.reason.is_empty(),
+            (Some(_), None) => false,
+        };
+        if newer {
+            entry.age_secs = age;
+            entry.reason = event
+                .reason
+                .clone()
+                .unwrap_or_else(|| "Warning".to_string());
+        }
+    }
+    let mut list: Vec<ObjectWarning> = map.into_values().collect();
+    // Loudest first, then the most recent.
+    list.sort_by(|a, b| {
+        b.count.cmp(&a.count).then_with(|| {
+            a.age_secs
+                .unwrap_or(u64::MAX)
+                .cmp(&b.age_secs.unwrap_or(u64::MAX))
+        })
+    });
+    list.truncate(WARNING_OBJECT_LIMIT);
+    list
+}
+
+fn event_time_age(event: &Event) -> Option<u64> {
+    event
+        .last_timestamp
+        .as_ref()
+        .map(|ts| ts.0.as_second())
+        .or_else(|| event.event_time.as_ref().map(|ts| ts.0.as_second()))
+        .or_else(|| {
+            event
+                .metadata
+                .creation_timestamp
+                .as_ref()
+                .map(|ts| ts.0.as_second())
+        })
+        .map(seconds_since)
+}
+
 async fn list_query<K>(api: Api<K>, labels: &str, fields: &str) -> Result<Vec<K>, String>
 where
     K: Resource<DynamicType = ()> + Clone + DeserializeOwned + std::fmt::Debug,
@@ -2252,7 +2449,10 @@ fn recent_warnings(events: &[Event]) -> Vec<OverviewWarning> {
 }
 
 fn event_age(ts: &k8s_openapi::apimachinery::pkg::apis::meta::v1::Time) -> u64 {
-    let then = ts.0.as_second();
+    seconds_since(ts.0.as_second())
+}
+
+fn seconds_since(then: i64) -> u64 {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
@@ -3224,5 +3424,142 @@ mod overview_tests {
         });
         assert_eq!(app_set_status(&healthy), "Healthy");
         assert_eq!(app_set_status(&serde_json::json!({})), "Unknown");
+    }
+}
+
+#[cfg(test)]
+mod event_tests {
+    use super::*;
+    use k8s_openapi::api::core::v1::{EventSeries, EventSource, ObjectReference};
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, Time};
+
+    fn ago(secs: i64) -> Time {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs() as i64)
+            .unwrap_or(0);
+        Time(k8s_openapi::jiff::Timestamp::from_second(now - secs).unwrap())
+    }
+
+    fn event(reason: &str, kind: &str, at: Option<Time>) -> Event {
+        Event {
+            metadata: ObjectMeta {
+                name: Some(reason.to_string()),
+                creation_timestamp: at,
+                ..ObjectMeta::default()
+            },
+            type_: Some(kind.to_string()),
+            reason: Some(reason.to_string()),
+            message: Some(format!("{reason} happened")),
+            ..Event::default()
+        }
+    }
+
+    #[test]
+    fn warnings_first_then_newest() {
+        let mut events = vec![
+            to_event_info(&event("Scheduled", "Normal", Some(ago(300)))),
+            to_event_info(&event("Pulled", "Normal", Some(ago(20)))),
+            to_event_info(&event("Unhealthy", "Warning", Some(ago(120)))),
+            to_event_info(&event("BackOff", "Warning", Some(ago(5)))),
+        ];
+        sort_events(&mut events);
+        let order: Vec<&str> = events.iter().map(|item| item.reason.as_str()).collect();
+        assert_eq!(order, ["BackOff", "Unhealthy", "Pulled", "Scheduled"]);
+        assert!(events[0].age_secs.unwrap() < events[1].age_secs.unwrap());
+    }
+
+    #[test]
+    fn count_and_source_fall_back() {
+        let mut series = event("Unhealthy", "Warning", Some(ago(10)));
+        series.count = None;
+        series.series = Some(EventSeries {
+            count: Some(25),
+            ..EventSeries::default()
+        });
+        series.reporting_component = Some("kubelet".to_string());
+        let info = to_event_info(&series);
+        assert_eq!(info.count, 25);
+        assert_eq!(info.source, "kubelet");
+        assert_eq!(info.message, "Unhealthy happened");
+
+        // A source block wins over the reporting component, and a lone event counts once.
+        let mut plain = event("Pulled", "Normal", Some(ago(30)));
+        plain.source = Some(EventSource {
+            component: Some("kubelet".to_string()),
+            ..EventSource::default()
+        });
+        plain.reporting_component = Some("ignored".to_string());
+        let info = to_event_info(&plain);
+        assert_eq!(info.count, 1);
+        assert_eq!(info.source, "kubelet");
+    }
+
+    #[test]
+    fn missing_kind_and_timestamp_are_handled() {
+        let mut bare = event("Created", "Normal", None);
+        bare.type_ = None;
+        let info = to_event_info(&bare);
+        assert_eq!(info.kind, "Normal");
+        assert!(info.age_secs.is_none());
+        assert_eq!(info.source, "");
+
+        // No timestamp sinks below dated events of the same kind.
+        let mut events = vec![
+            to_event_info(&bare),
+            to_event_info(&event("Started", "Normal", Some(ago(60)))),
+        ];
+        sort_events(&mut events);
+        assert_eq!(events[0].reason, "Started");
+        assert_eq!(events[1].reason, "Created");
+    }
+
+    #[test]
+    fn limit_is_bounded() {
+        let mut events: Vec<EventInfo> = (0..EVENT_LIMIT + 20)
+            .map(|index| to_event_info(&event(&format!("R{index}"), "Normal", Some(ago(index as i64)))))
+            .collect();
+        sort_events(&mut events);
+        events.truncate(EVENT_LIMIT);
+        assert_eq!(events.len(), EVENT_LIMIT);
+        assert_eq!(events[0].reason, "R0");
+    }
+
+    fn warning(reason: &str, uid: &str, name: &str, count: i32, at: Option<Time>) -> Event {
+        let mut event = event(reason, "Warning", at);
+        event.count = Some(count);
+        event.involved_object = ObjectReference {
+            uid: Some(uid.to_string()),
+            name: Some(name.to_string()),
+            namespace: Some("apps".to_string()),
+            ..ObjectReference::default()
+        };
+        event
+    }
+
+    #[test]
+    fn aggregates_warnings_per_object() {
+        let list = aggregate_warnings(&[
+            warning("Unhealthy", "u1", "pod-a", 5, Some(ago(300))),
+            warning("BackOff", "u1", "pod-a", 2, Some(ago(20))),
+            warning("FailedMount", "u2", "pod-b", 1, Some(ago(60))),
+        ]);
+        assert_eq!(list.len(), 2);
+        // Loudest first, counts added up, reason from the newest occurrence.
+        assert_eq!(list[0].uid, "u1");
+        assert_eq!(list[0].name, "pod-a");
+        assert_eq!(list[0].namespace, "apps");
+        assert_eq!(list[0].count, 7);
+        assert_eq!(list[0].reason, "BackOff");
+        assert!(list[0].age_secs.unwrap() < 60);
+        assert_eq!(list[1].uid, "u2");
+        assert_eq!(list[1].reason, "FailedMount");
+    }
+
+    #[test]
+    fn warnings_without_uid_are_skipped() {
+        let mut orphan = event("Orphan", "Warning", Some(ago(10)));
+        orphan.count = Some(3);
+        assert!(aggregate_warnings(&[orphan]).is_empty());
     }
 }
