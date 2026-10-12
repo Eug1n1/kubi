@@ -85,6 +85,8 @@ function snapshotOf(tab: DockLog): LogSnapshot {
     lines: tab.lines,
     started: tab.started,
     closed: tab.closed,
+    previous: tab.previous,
+    timestamps: tab.timestamps,
   };
 }
 
@@ -159,6 +161,8 @@ export function useKubi() {
     close: (label: string) => void;
     pod: (label: string, pod: string) => void;
     container: (label: string, container: string) => void;
+    previous: (label: string, value: boolean) => void;
+    timestamps: (label: string, value: boolean) => void;
     input: (label: string, data: string) => void;
     resize: (label: string, cols: number, rows: number) => void;
     execContainer: (label: string, container: string) => void;
@@ -168,6 +172,8 @@ export function useKubi() {
     close: () => {},
     pod: () => {},
     container: () => {},
+    previous: () => {},
+    timestamps: () => {},
     input: () => {},
     resize: () => {},
     execContainer: () => {},
@@ -323,33 +329,51 @@ export function useKubi() {
     name: string,
     pod: string | null,
     container: string | null,
-    previous: DockLog | null,
+    prior: DockLog | null,
   ): DockLog {
-    if (previous) void send({ stopLog: { id: previous.id } });
+    if (prior) void send({ stopLog: { id: prior.id } });
     logSeq.current += 1;
     const id = logSeq.current;
-    const samePod = previous != null && (pod == null || pod === previous.pod);
-    void send({ startLogs: { id, kind, namespace, name, pod, container } });
+    const samePod = prior != null && (pod == null || pod === prior.pod);
+    const previous = prior?.previous ?? false;
+    const timestamps = prior?.timestamps ?? false;
+    void send({ startLogs: { id, kind, namespace, name, pod, container, previous, timestamps } });
     return {
       pane: "log",
       id,
-      label: previous?.label ?? `log-${id}`,
-      detached: previous?.detached ?? false,
+      label: prior?.label ?? `log-${id}`,
+      detached: prior?.detached ?? false,
       kind,
       namespace,
       name,
-      pods: previous ? previous.pods : [],
-      pod: pod ?? previous?.pod ?? "",
-      containers: samePod && previous ? previous.containers : [],
-      container: container ?? (samePod && previous ? previous.container : ""),
+      pods: prior ? prior.pods : [],
+      pod: pod ?? prior?.pod ?? "",
+      containers: samePod && prior ? prior.containers : [],
+      container: container ?? (samePod && prior ? prior.container : ""),
       lines: [],
       started: false,
       closed: false,
+      previous,
+      timestamps,
     };
   }
 
   function replaceLog(current: DockLog, pod: string | null, container: string | null) {
     const tab = beginStream(current.kind, current.namespace, current.name, pod, container, current);
+    setDock(dockRef.current.map((item) => (item.label === current.label ? tab : item)));
+    publishLog(tab);
+  }
+
+  /** Restart the stream with different flags, keeping pod, container and window state. */
+  function flagLog(current: DockLog, patch: Partial<Pick<DockLog, "previous" | "timestamps">>) {
+    const tab = beginStream(
+      current.kind,
+      current.namespace,
+      current.name,
+      current.pod || null,
+      current.container || null,
+      { ...current, ...patch },
+    );
     setDock(dockRef.current.map((item) => (item.label === current.label ? tab : item)));
     publishLog(tab);
   }
@@ -601,7 +625,39 @@ export function useKubi() {
     void send("fetchOverview");
   }
 
-  function openView(view: View) {
+  /** Point one tab at another namespace and restart its watch. */
+  function applyNamespace(index: number, namespace: string | null) {
+    const tab = session.current.tabs[index];
+    if (!tab || tab.namespace === namespace) return;
+    session.current.lastNamespace = namespace;
+    setMenu(null);
+    updateTabs((items) =>
+      items.map((item, i) =>
+        i === index
+          ? {
+              ...item,
+              namespace,
+              rows: [],
+              selected: null,
+              selection: [],
+              anchor: null,
+              yaml: null,
+              yamlFor: null,
+              data: null,
+              dataFor: null,
+              waiting: true,
+            }
+          : item,
+      ),
+    );
+    session.current.usage = {};
+    setHistory([]);
+    const target = watchOf(session.current.tabs[index]?.view ?? tab.view);
+    void send({ setNamespace: { namespace } });
+    if (target) void send({ watch: { target } });
+  }
+
+  function openView(view: View, namespace?: string | null) {
     if (view.kind === "overview") {
       showHome("cluster");
       return;
@@ -612,11 +668,16 @@ export function useKubi() {
     }
     const existing = session.current.tabs.findIndex((tab) => sameView(tab.view, view));
     if (existing >= 0) {
+      if (namespace != null && session.current.tabs[existing]?.namespace !== namespace) {
+        if (session.current.active !== existing) activate(existing);
+        applyNamespace(existing, namespace);
+        return;
+      }
       if (session.current.active === existing) return;
       activate(existing);
       return;
     }
-    const tab = blankTab(view, inherited(), session.current.nextId);
+    const tab = blankTab(view, namespace === undefined ? inherited() : namespace, session.current.nextId);
     session.current.nextId += 1;
     commitTabs([...session.current.tabs, tab]);
     activate(session.current.tabs.length - 1);
@@ -1017,6 +1078,16 @@ export function useKubi() {
       if (!current || current.pane !== "log" || container === current.container) return;
       replaceLog(current, current.pod || null, container);
     },
+    previous: (label, value) => {
+      const current = findDock(label);
+      if (!current || current.pane !== "log" || current.previous === value) return;
+      flagLog(current, { previous: value });
+    },
+    timestamps: (label, value) => {
+      const current = findDock(label);
+      if (!current || current.pane !== "log" || current.timestamps === value) return;
+      flagLog(current, { timestamps: value });
+    },
     input: execInputLabel,
     resize: execResizeLabel,
     execContainer: setExecContainer,
@@ -1071,6 +1142,16 @@ export function useKubi() {
         listen<{ label: string; container: string }>(
           "log-container",
           (event) => dockActions.current.container(event.payload.label, event.payload.container),
+          { target: "main" },
+        ),
+        listen<{ label: string; value: boolean }>(
+          "log-previous",
+          (event) => dockActions.current.previous(event.payload.label, event.payload.value),
+          { target: "main" },
+        ),
+        listen<{ label: string; value: boolean }>(
+          "log-timestamps",
+          (event) => dockActions.current.timestamps(event.payload.label, event.payload.value),
           { target: "main" },
         ),
         listen<{ label: string }>("exec-ready", (event) => dockActions.current.ready(event.payload.label), {
@@ -1194,34 +1275,7 @@ export function useKubi() {
     setNamespace: (namespace: string | null) => {
       const index = session.current.active;
       if (index == null) return;
-      const tab = session.current.tabs[index];
-      if (!tab || tab.namespace === namespace) return;
-      session.current.lastNamespace = namespace;
-      setMenu(null);
-      updateTabs((items) =>
-        items.map((item, i) =>
-          i === index
-            ? {
-                ...item,
-                namespace,
-                rows: [],
-                selected: null,
-                selection: [],
-                anchor: null,
-                yaml: null,
-                yamlFor: null,
-                data: null,
-                dataFor: null,
-                waiting: true,
-              }
-            : item,
-        ),
-      );
-      session.current.usage = {};
-      setHistory([]);
-      const target = watchOf(session.current.tabs[index]?.view ?? tab.view);
-      void send({ setNamespace: { namespace } });
-      if (target) void send({ watch: { target } });
+      applyNamespace(index, namespace);
     },
     setFilter: (filter: string) => {
       const index = session.current.active;
@@ -1287,6 +1341,16 @@ export function useKubi() {
       const current = findDock(activeDockRef.current ?? "");
       if (!current || current.pane !== "log" || current.detached || container === current.container) return;
       replaceLog(current, current.pod || null, container);
+    },
+    setLogPrevious: (previous: boolean) => {
+      const current = findDock(activeDockRef.current ?? "");
+      if (!current || current.pane !== "log" || current.detached || previous === current.previous) return;
+      flagLog(current, { previous });
+    },
+    setLogTimestamps: (timestamps: boolean) => {
+      const current = findDock(activeDockRef.current ?? "");
+      if (!current || current.pane !== "log" || current.detached || timestamps === current.timestamps) return;
+      flagLog(current, { timestamps });
     },
     openMenu: (x: number, y: number, uid: string) => {
       const index = session.current.active;

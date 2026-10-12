@@ -1,20 +1,51 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import type { LogSnapshot } from "./types";
 
 const LINE_CAP = 4000;
+
+/** The RFC3339 prefix the API server adds when timestamps are on. */
+const TIMESTAMP = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))(?: (.*))?$/;
+
+/** Renders the API timestamp dimmer than the message itself. */
+function LogLines({ lines }: { lines: string[] }) {
+  return (
+    <>
+      {lines.map((line, index) => {
+        const parts = TIMESTAMP.exec(line);
+        return (
+          <Fragment key={index}>
+            {index > 0 ? "\n" : null}
+            {parts ? (
+              <>
+                <span className="log-ts">{parts[1]}</span>
+                {parts[2] ? ` ${parts[2]}` : ""}
+              </>
+            ) : (
+              line
+            )}
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
 
 export function LogPane({
   logs,
   follow,
   onPod,
   onContainer,
+  onPrevious,
+  onTimestamps,
   onClose,
 }: {
   logs: LogSnapshot;
   follow: number | string;
   onPod: (pod: string) => void;
   onContainer: (container: string) => void;
+  onPrevious: (value: boolean) => void;
+  onTimestamps: (value: boolean) => void;
   onClose: () => void;
 }) {
   const box = useRef<HTMLPreElement>(null);
@@ -60,6 +91,24 @@ export function LogPane({
             </option>
           ))}
         </select>
+        <button
+          className={logs.previous ? "icon on" : "icon"}
+          aria-pressed={logs.previous}
+          aria-label="Previous container logs"
+          title="Logs from the previous container instance"
+          onClick={() => onPrevious(!logs.previous)}
+        >
+          <HistoryIcon />
+        </button>
+        <button
+          className={logs.timestamps ? "icon on" : "icon"}
+          aria-pressed={logs.timestamps}
+          aria-label="Show timestamps"
+          title="Prefix every line with its RFC3339 timestamp"
+          onClick={() => onTimestamps(!logs.timestamps)}
+        >
+          <ClockIcon />
+        </button>
         {logs.closed ? <span className="muted">stream closed</span> : null}
         <span className="spacer" />
         <button aria-label="Close logs" onClick={onClose}>
@@ -74,7 +123,7 @@ export function LogPane({
             stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
           }}
         >
-          {noPods ? "No pods" : !logs.started ? "Loading logs…" : logs.lines.join("\n")}
+          {noPods ? "No pods" : !logs.started ? "Loading logs…" : logs.timestamps ? <LogLines lines={logs.lines} /> : logs.lines.join("\n")}
         </pre>
       </div>
     </>
@@ -141,6 +190,12 @@ export function LogWindow({ label }: { label: string }) {
         onContainer={(container) => {
           void emitTo("main", "log-container", { label, container });
         }}
+        onPrevious={(value) => {
+          void emitTo("main", "log-previous", { label, value });
+        }}
+        onTimestamps={(value) => {
+          void emitTo("main", "log-timestamps", { label, value });
+        }}
         onClose={() => {
           void emitTo("main", "log-close", { label });
         }}
@@ -152,5 +207,24 @@ export function LogWindow({ label }: { label: string }) {
     <section className="log-drawer log-window" aria-label="Logs">
       {body}
     </section>
+  );
+}
+
+/** Arrow turning back: the container instance before the current one. */
+function HistoryIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path d="M3.5 8a4.5 4.5 0 1 0 1.2-3.1" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M3.4 2.8v2.7h2.7" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ClockIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M8 5v3.1l2.2 1.4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }

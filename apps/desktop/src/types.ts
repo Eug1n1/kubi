@@ -189,6 +189,10 @@ export type Command =
         name: string;
         pod: string | null;
         container: string | null;
+        /** Stream the previous terminated container instance. */
+        previous: boolean;
+        /** Ask the API server to prefix every line with an RFC3339 timestamp. */
+        timestamps: boolean;
       };
     }
   | { stopLog: { id: number } }
@@ -284,6 +288,10 @@ export type LogSnapshot = {
   lines: string[];
   started: boolean;
   closed: boolean;
+  /** Showing the logs of the previous terminated container instance. */
+  previous: boolean;
+  /** The API server prefixes every line with an RFC3339 timestamp. */
+  timestamps: boolean;
 };
 
 export type LogsView = LogSnapshot & {

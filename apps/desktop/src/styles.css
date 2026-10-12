@@ -488,6 +488,11 @@ button.icon svg { display: block; }
   border: 1px solid var(--separator);
   border-radius: 3px;
 }
+.log-drawer header button.on { background: var(--selected); color: var(--text); }
+.log-drawer header button.icon.on { color: var(--accent); }
+.toolbar input.filter { width: 220px; }
+.toolbar input.filter.invalid { border-color: var(--bad); }
+.toolbar .hint { color: var(--warn); }
 .logs {
   flex: 1;
   min-height: 0;
@@ -507,6 +512,8 @@ button.icon svg { display: block; }
   font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
   white-space: pre;
 }
+/* The API timestamp is dimmed so the message itself stays dominant. */
+.logs pre .log-ts { color: var(--muted); }
 .wrap { overflow-wrap: anywhere; white-space: pre-wrap; }
 .yaml-tab .row { display: flex; gap: 8px; margin-bottom: 6px; }
 .yaml-tab textarea.yaml {

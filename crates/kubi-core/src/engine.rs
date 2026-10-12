@@ -248,7 +248,9 @@ impl Engine {
                 name,
                 pod,
                 container,
-            } => self.start_logs(id, kind, namespace, name, pod, container),
+                previous,
+                timestamps,
+            } => self.start_logs(id, kind, namespace, name, pod, container, previous, timestamps),
             Command::StopLog { id } => self.stop_log(id),
             Command::StopLogs => self.stop_logs(),
             Command::Apply { yaml, namespace } => self.spawn_apply(yaml, namespace),
@@ -844,6 +846,8 @@ impl Engine {
         name: String,
         pod: Option<String>,
         container: Option<String>,
+        previous: bool,
+        timestamps: bool,
     ) {
         self.stop_log(id);
         let Some(client) = self.current_client() else {
@@ -861,6 +865,8 @@ impl Engine {
             name,
             pod,
             container,
+            previous,
+            timestamps,
         };
         tokio::spawn(async move {
             if let Err(err) = stream_logs(client, id, query, cancel, events.clone()).await {
@@ -1323,6 +1329,8 @@ struct LogQuery {
     name: String,
     pod: Option<String>,
     container: Option<String>,
+    previous: bool,
+    timestamps: bool,
 }
 
 struct LogFollow {
@@ -1332,6 +1340,8 @@ struct LogFollow {
     pods: Vec<String>,
     pod: String,
     container: Option<String>,
+    previous: bool,
+    timestamps: bool,
 }
 
 async fn stream_logs(
@@ -1369,6 +1379,8 @@ async fn stream_logs(
             pods,
             pod: pod_name,
             container: query.container,
+            previous: query.previous,
+            timestamps: query.timestamps,
         },
         cancel,
         events,
@@ -1489,6 +1501,11 @@ fn selector_query(selector: &LabelSelector) -> String {
     parts.join(",")
 }
 
+/// Lines kept from the live stream before following.
+const LIVE_TAIL_LINES: i64 = 200;
+/// A terminated container cannot be followed, so widen the window instead.
+const PREVIOUS_TAIL_LINES: i64 = 1000;
+
 async fn follow_logs(
     client: Client,
     follow: LogFollow,
@@ -1505,6 +1522,8 @@ async fn follow_logs(
         pods,
         pod: pod_name,
         container,
+        previous,
+        timestamps,
     } = follow;
     let api = Api::<Pod>::namespaced(client, &namespace);
     let pod = api.get(&pod_name).await.map_err(|err| err.to_string())?;
@@ -1532,8 +1551,15 @@ async fn follow_logs(
     }
     let params = LogParams {
         container: Some(selected),
-        follow: true,
-        tail_lines: Some(200),
+        // A terminated container has nothing to follow: the stream ends at EOF.
+        follow: !previous,
+        previous,
+        timestamps,
+        tail_lines: Some(if previous {
+            PREVIOUS_TAIL_LINES
+        } else {
+            LIVE_TAIL_LINES
+        }),
         ..LogParams::default()
     };
     let reader = api

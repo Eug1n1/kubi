@@ -427,6 +427,12 @@ pub enum Command {
         name: String,
         pod: Option<String>,
         container: Option<String>,
+        /// Stream the previous terminated container instance instead of the live one.
+        #[serde(default)]
+        previous: bool,
+        /// Ask the API server to prefix every line with an RFC3339 timestamp.
+        #[serde(default)]
+        timestamps: bool,
     },
     StopLog {
         id: u64,
@@ -588,6 +594,8 @@ mod serde_tests {
             name: "app".into(),
             pod: None,
             container: None,
+            previous: true,
+            timestamps: true,
         };
         let logs = serde_json::to_value(&logs).unwrap();
         assert_eq!(logs["startLogs"]["id"], 4);
@@ -595,6 +603,30 @@ mod serde_tests {
         assert!(logs["startLogs"]["pod"].is_null());
         assert!(logs["startLogs"]["container"].is_null());
         assert_eq!(logs["startLogs"]["name"], "app");
+        assert_eq!(logs["startLogs"]["previous"], true);
+        assert_eq!(logs["startLogs"]["timestamps"], true);
+        let bare: Command = serde_json::from_value(serde_json::json!({
+            "startLogs": {
+                "id": 1,
+                "kind": "pods",
+                "namespace": "default",
+                "name": "app",
+                "pod": null,
+                "container": null,
+            }
+        }))
+        .unwrap();
+        match bare {
+            Command::StartLogs {
+                previous,
+                timestamps,
+                ..
+            } => {
+                assert!(!previous);
+                assert!(!timestamps);
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
         assert_eq!(
             serde_json::to_value(Command::StopLog { id: 4 }).unwrap()["stopLog"]["id"],
             4

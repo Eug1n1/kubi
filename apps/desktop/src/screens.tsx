@@ -10,6 +10,7 @@ import {
   canForward,
   canLogs,
   canRestart,
+  completeSearch,
   crGroups,
   hasValues,
   installedGateway,
@@ -18,6 +19,7 @@ import {
   searchHits,
   supportsMetrics,
   viewTitle,
+  type SearchHit,
 } from "./catalog";
 import { columnKey, columnsFor, compareRows, fieldText, type Field } from "./columns";
 import { clusterColor, formatAge, formatBytes, formatBytesPair, formatCpu, formatCpuPair, initials, liveAge, previewValue } from "./format";
@@ -398,9 +400,30 @@ export function NamespaceSelect({ kubi }: { kubi: Kubi }) {
 export function ResourceScreen({ kubi }: { kubi: Kubi }) {
   const gesture = useTabDrag();
   const strip = useRef<HTMLDivElement>(null);
+  const filterBox = useRef<HTMLInputElement>(null);
+  const modal = kubi.searchOpen || kubi.createOpen || kubi.pendingDelete != null || kubi.forwardDraft != null;
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "/" || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+      const node = event.target as HTMLElement | null;
+      if (
+        node != null &&
+        (node.isContentEditable || node.tagName === "INPUT" || node.tagName === "TEXTAREA" || node.tagName === "SELECT")
+      ) {
+        return;
+      }
+      if (modal) return;
+      event.preventDefault();
+      filterBox.current?.focus();
+      filterBox.current?.select();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [modal]);
   const tab = kubi.activeTab;
   if (!tab) return null;
   const kind: ResourceKind | null = tab.view.kind === "resource" ? tab.view.resource : null;
+  const match = rowFilter(tab.filter);
   const selected = tab.rows.find((row) => row.uid === tab.selected) ?? null;
   const picked = tab.selection.length > 0;
   return (
@@ -466,10 +489,23 @@ export function ResourceScreen({ kubi }: { kubi: Kubi }) {
       <div className="toolbar">
         <NamespaceSelect kubi={kubi} />
         <input
+          ref={filterBox}
+          className={match.invalid ? "filter invalid" : "filter"}
           value={tab.filter}
-          placeholder="Filter"
+          placeholder="Filter (regex, / to focus)"
+          aria-label="Filter rows"
+          title="Case-insensitive regular expression"
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
           onChange={(event) => kubi.setFilter(event.target.value)}
         />
+        {match.invalid ? (
+          <span className="hint" title="Incomplete regex, matching plain text">
+            literal
+          </span>
+        ) : null}
         <span className="muted">{visibleRows(tab).length}</span>
         <span className="spacer" />
         {kind && canLogs(kind) && selected ? (
@@ -514,9 +550,32 @@ export function ResourceScreen({ kubi }: { kubi: Kubi }) {
   );
 }
 
+type RowFilter = {
+  test: (row: ResourceRow) => boolean;
+  /** The pattern does not compile yet, so plain text matching is in use. */
+  invalid: boolean;
+};
+
+/**
+ * The row filter is a case-insensitive regular expression. While the pattern is
+ * still incomplete (a lone `(`, say) it degrades to plain substring matching so
+ * the table never blanks out mid-typing.
+ */
+function rowFilter(filter: string): RowFilter {
+  const needle = filter.trim();
+  if (needle === "") return { test: () => true, invalid: false };
+  try {
+    const pattern = new RegExp(needle, "i");
+    return { test: (row) => pattern.test(row.name), invalid: false };
+  } catch {
+    const plain = needle.toLowerCase();
+    return { test: (row) => row.name.toLowerCase().includes(plain), invalid: true };
+  }
+}
+
 function visibleRows(tab: NonNullable<Kubi["activeTab"]>): ResourceRow[] {
-  const needle = tab.filter.trim().toLowerCase();
-  const rows = tab.rows.filter((row) => needle === "" || row.name.toLowerCase().includes(needle));
+  const match = rowFilter(tab.filter);
+  const rows = tab.rows.filter(match.test);
   const field = fieldFromKey(tab.sortKey);
   return [...rows].sort((a, b) => compareRows(a, b, field, tab.sortAsc));
 }
@@ -971,6 +1030,8 @@ export function SessionDrawer({
           follow={active.id}
           onPod={kubi.setLogPod}
           onContainer={kubi.setLogContainer}
+          onPrevious={kubi.setLogPrevious}
+          onTimestamps={kubi.setLogTimestamps}
           onClose={() => kubi.closeDock(active.label)}
         />
       ) : (
@@ -1864,37 +1925,60 @@ function Chart({ points, color }: { points: number[]; color: string }) {
 export function SearchModal({ kubi }: { kubi: Kubi }) {
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
-  const hits = searchHits(query, kubi.customResources);
+  const hits = searchHits(query, kubi.customResources, kubi.namespaces);
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
     input.current?.focus();
   }, []);
   const safe = hits.length === 0 ? 0 : cursor % hits.length;
+  const open = (hit: SearchHit) => {
+    kubi.openView(hit.view, hit.namespace);
+    kubi.setSearchOpen(false);
+  };
+  const letter = (event: { key: string }) => event.key.toLowerCase();
+  const chord = (event: { ctrlKey: boolean; metaKey: boolean; altKey: boolean }) =>
+    event.ctrlKey && !event.metaKey && !event.altKey;
   return (
     <div className="modal-back" onMouseDown={() => kubi.setSearchOpen(false)}>
       <div className="modal" onMouseDown={(event) => event.stopPropagation()}>
         <input
           ref={input}
           value={query}
-          placeholder="Search resources"
+          placeholder="Search resources — try pods kube-system"
+          aria-label="Search resources"
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
           onChange={(event) => {
             setQuery(event.target.value);
             setCursor(0);
           }}
           onKeyDown={(event) => {
             if (event.key === "Escape") kubi.setSearchOpen(false);
-            if (event.key === "ArrowDown") {
+            if (event.key === "Tab") {
+              event.preventDefault();
+              const next = completeSearch(
+                query,
+                kubi.customResources,
+                kubi.namespaces,
+                hits[safe]?.label ?? null,
+              );
+              if (next != null) {
+                setQuery(next);
+                setCursor(0);
+              }
+              return;
+            }
+            if (event.key === "ArrowDown" || (chord(event) && letter(event) === "n")) {
               setCursor((value) => value + 1);
               event.preventDefault();
             }
-            if (event.key === "ArrowUp") {
+            if (event.key === "ArrowUp" || (chord(event) && letter(event) === "p")) {
               setCursor((value) => Math.max(0, value - 1));
               event.preventDefault();
             }
-            if (event.key === "Enter" && hits[safe]) {
-              kubi.openView(hits[safe].view);
-              kubi.setSearchOpen(false);
-            }
+            if (event.key === "Enter" && hits[safe]) open(hits[safe]);
           }}
         />
         <div className="search-list">
@@ -1902,10 +1986,7 @@ export function SearchModal({ kubi }: { kubi: Kubi }) {
             <button
               key={`${hit.label}-${hit.hint}-${index}`}
               className={index === safe ? "on" : ""}
-              onClick={() => {
-                kubi.openView(hit.view);
-                kubi.setSearchOpen(false);
-              }}
+              onClick={() => open(hit)}
             >
               <span>{hit.label}</span>
               <span className="muted">{hit.hint}</span>
