@@ -16,8 +16,11 @@ import {
   installedGateway,
   isSecret,
   logTitle,
+  namespaceCandidates,
+  planSearch,
   searchHits,
   supportsMetrics,
+  viewAcceptsNamespace,
   viewTitle,
   type SearchHit,
 } from "./catalog";
@@ -1992,15 +1995,44 @@ function Chart({ points, color }: { points: number[]; color: string }) {
 export function SearchModal({ kubi }: { kubi: Kubi }) {
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
+  const [step, setStep] = useState(0);
   const hits = searchHits(query, kubi.customResources, kubi.namespaces);
+  const plan = planSearch(query, kubi.customResources, kubi.namespaces);
+  const preferred = kubi.activeTab?.namespace ?? null;
+  const candidates = plan.namespaceSlot
+    ? namespaceCandidates(plan.namespaceFragment ?? "", kubi.namespaces, preferred)
+    : [];
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
     input.current?.focus();
   }, []);
   const safe = hits.length === 0 ? 0 : cursor % hits.length;
+  const picked = plan.namespaceSlot ? (candidates[step % candidates.length] ?? null) : null;
   const open = (hit: SearchHit) => {
-    kubi.openView(hit.view, hit.namespace);
+    // An open namespace position resolves to the highlighted suggestion; with no
+    // namespace in play the view keeps the namespace it opens from.
+    const namespace = viewAcceptsNamespace(hit.view) ? (hit.namespace ?? picked) : null;
+    kubi.openView(hit.view, namespace ?? undefined);
     kubi.setSearchOpen(false);
+  };
+  const complete = () => {
+    const next = completeSearch(
+      query,
+      kubi.customResources,
+      kubi.namespaces,
+      hits[safe]?.label ?? null,
+      plan.namespaceSlot ? step : 0,
+      preferred,
+    );
+    if (next == null) return;
+    setQuery(next);
+    setCursor(0);
+    setStep(plan.namespaceSlot ? step + 1 : 0);
+  };
+  const chooseNamespace = (name: string) => {
+    setQuery(`${plan.text} ${name}`);
+    setCursor(0);
+    setStep(0);
   };
   const letter = (event: { key: string }) => event.key.toLowerCase();
   const chord = (event: { ctrlKey: boolean; metaKey: boolean; altKey: boolean }) =>
@@ -2020,21 +2052,13 @@ export function SearchModal({ kubi }: { kubi: Kubi }) {
           onChange={(event) => {
             setQuery(event.target.value);
             setCursor(0);
+            setStep(0);
           }}
           onKeyDown={(event) => {
             if (event.key === "Escape") kubi.setSearchOpen(false);
             if (event.key === "Tab") {
               event.preventDefault();
-              const next = completeSearch(
-                query,
-                kubi.customResources,
-                kubi.namespaces,
-                hits[safe]?.label ?? null,
-              );
-              if (next != null) {
-                setQuery(next);
-                setCursor(0);
-              }
+              complete();
               return;
             }
             if (event.key === "ArrowDown" || (chord(event) && letter(event) === "n")) {
@@ -2048,6 +2072,21 @@ export function SearchModal({ kubi }: { kubi: Kubi }) {
             if (event.key === "Enter" && hits[safe]) open(hits[safe]);
           }}
         />
+        {candidates.length > 0 ? (
+          <div className="ns-hints">
+            <span className="muted">Namespace ⇥</span>
+            {candidates.slice(0, 8).map((name, index) => (
+              <button
+                key={name}
+                className={index === step % candidates.length ? "on" : ""}
+                onClick={() => chooseNamespace(name)}
+              >
+                {name}
+              </button>
+            ))}
+            {candidates.length > 8 ? <span className="muted">+{candidates.length - 8}</span> : null}
+          </div>
+        ) : null}
         <div className="search-list">
           {hits.slice(0, 40).map((hit, index) => (
             <button

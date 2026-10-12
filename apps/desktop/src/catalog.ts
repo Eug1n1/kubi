@@ -204,7 +204,29 @@ export type SearchPlan = {
   namespace: string | null;
   /** Namespace fragment the user is still typing (`pods kube-sys`). */
   namespacePrefix: string | null;
+  /**
+   * What sits at the namespace position: `""` when the query ends in a space
+   * (`pods `), the typed fragment otherwise (`pods kube`). Null when the query
+   * is not at that position.
+   */
+  namespaceFragment: string | null;
+  /**
+   * True while that position is still open — an empty fragment or a prefix that
+   * has not settled on one namespace. Tab walks the candidates while it is set,
+   * and completes the resource name once the namespace is settled.
+   */
+  namespaceSlot: boolean;
 };
+
+/** Derives `namespaceSlot` so every branch agrees on what is still open. */
+function planOf(base: Omit<SearchPlan, "namespaceSlot">): SearchPlan {
+  return {
+    ...base,
+    namespaceSlot:
+      base.namespaceFragment != null &&
+      (base.namespaceFragment === "" || base.namespacePrefix != null),
+  };
+}
 
 type RawHit = { view: View; label: string; hint: string };
 
@@ -215,7 +237,7 @@ function contains(haystack: string, needle: string): boolean {
   return needle === "" || haystack.toLowerCase().includes(needle);
 }
 
-function viewNamespaced(view: View): boolean {
+export function viewAcceptsNamespace(view: View): boolean {
   if (view.kind === "resource") return isNamespaced(view.resource);
   if (view.kind === "custom") return view.target.namespaced;
   return false;
@@ -254,7 +276,7 @@ function matchResources(needle: string, targets: CrTarget[]): RawHit[] {
 
 function decorate(hits: RawHit[], namespace: string | null, prefix: string | null): SearchHit[] {
   return hits.map((hit) => {
-    const scoped = viewNamespaced(hit.view);
+    const scoped = viewAcceptsNamespace(hit.view);
     const pinned = scoped ? namespace : null;
     const pending = pinned == null && scoped ? prefix : null;
     const shown = pinned ?? pending;
@@ -267,16 +289,25 @@ function decorate(hits: RawHit[], namespace: string | null, prefix: string | nul
   });
 }
 
-function namespaceFragment(namespaces: string[], fragment: string): string | null {
-  if (fragment === "") return null;
-  const lower = fragment.toLowerCase();
-  return namespaces.some((name) => name.toLowerCase().startsWith(lower)) ? fragment : null;
-}
-
-function completeNamespace(fragment: string, namespaces: string[]): string | null {
-  const lower = fragment.toLowerCase();
-  const names = namespaces.filter((name) => name.toLowerCase().startsWith(lower)).sort();
-  return names.find((name) => name === fragment) ?? names[0] ?? null;
+/**
+ * What a namespace fragment determines on its own: an exact match, or a prefix
+ * with a single candidate. Anything still ambiguous stays open for the caller
+ * to resolve through the suggestions. `fallback` keeps an explicit `-n` as
+ * typed when nothing matches at all.
+ */
+function settledNamespace(
+  fragment: string,
+  namespaces: string[],
+  fallback: boolean,
+): { namespace: string | null; prefix: string | null } {
+  if (fragment === "") return { namespace: null, prefix: null };
+  if (namespaces.includes(fragment)) return { namespace: fragment, prefix: null };
+  const sole = namespaceCandidates(fragment, namespaces);
+  if (sole.length === 1) return { namespace: sole[0], prefix: null };
+  if (sole.length === 0) {
+    return { namespace: fallback ? fragment : null, prefix: null };
+  }
+  return { namespace: null, prefix: fragment };
 }
 
 /**
@@ -286,42 +317,55 @@ function completeNamespace(fragment: string, namespaces: string[]): string | nul
  */
 export function planSearch(query: string, targets: CrTarget[], namespaces: string[] = []): SearchPlan {
   const trimmed = query.trim();
-  const flag = NAMESPACE_FLAG.exec(trimmed);
+  // Matched against the raw query so `pods -n ` still counts as the namespace
+  // position even though trimming would drop the trailing space.
+  const flag = NAMESPACE_FLAG.exec(query);
   if (flag) {
-    const text = flag[1];
+    const text = flag[1].trim();
     const fragment = flag[2];
-    // An explicit `-n` is a namespace request: resolve a prefix, otherwise take it as typed.
-    const exact = namespaces.includes(fragment) ? fragment : null;
-    const resolved = exact ?? completeNamespace(fragment, namespaces) ?? (fragment === "" ? null : fragment);
-    const prefix = resolved === fragment ? null : namespaceFragment(namespaces, fragment);
-    return {
-      hits: decorate(matchResources(text.toLowerCase(), targets), resolved, prefix),
+    // An explicit `-n` is a namespace request: resolve it, otherwise take it as typed.
+    const { namespace, prefix } = settledNamespace(fragment, namespaces, true);
+    return planOf({
+      hits: decorate(matchResources(text.toLowerCase(), targets), namespace, prefix),
       text,
-      namespace: resolved,
+      namespace,
       namespacePrefix: prefix,
-    };
+      namespaceFragment: fragment,
+    });
   }
   const tokens = trimmed.split(/\s+/);
   if (tokens.length > 1) {
     const tail = tokens[tokens.length - 1];
     const head = tokens.slice(0, -1).join(" ");
-    const exact = namespaces.includes(tail) ? tail : null;
-    const prefix = exact == null ? namespaceFragment(namespaces, tail) : null;
-    if ((exact != null || prefix != null) && matchResources(trimmed.toLowerCase(), targets).length === 0) {
-      return {
-        hits: decorate(matchResources(head.toLowerCase(), targets), exact, prefix),
+    const { namespace, prefix } = settledNamespace(tail, namespaces, false);
+    if ((namespace != null || prefix != null) && matchResources(trimmed.toLowerCase(), targets).length === 0) {
+      return planOf({
+        hits: decorate(matchResources(head.toLowerCase(), targets), namespace, prefix),
         text: head,
-        namespace: exact,
+        namespace,
         namespacePrefix: prefix,
-      };
+        namespaceFragment: tail,
+      });
     }
   }
-  return {
+  // `pods ` — the resource is settled and the cursor sits at the namespace.
+  const settled = query.length > query.trimEnd().length;
+  if (settled && trimmed !== "" && matchResources(trimmed.toLowerCase(), targets).length > 0) {
+    return planOf({
+      hits: decorate(matchResources(trimmed.toLowerCase(), targets), null, null),
+      text: trimmed,
+      namespace: null,
+      namespacePrefix: null,
+      namespaceFragment: "",
+    });
+  }
+  return planOf({
     hits: decorate(matchResources(trimmed.toLowerCase(), targets), null, null),
     text: trimmed,
     namespace: null,
     namespacePrefix: null,
-  };
+    namespaceFragment: null,
+  });
 }
 
 export function searchHits(query: string, targets: CrTarget[], namespaces: string[] = []): SearchHit[] {
@@ -329,24 +373,42 @@ export function searchHits(query: string, targets: CrTarget[], namespaces: strin
 }
 
 /**
- * Tab completion. `selected` is the label of the highlighted list entry, so the
- * result follows the cursor rather than the first hit. Without it the resource
- * name is finished from the current text, then the namespace once the query has
- * moved past it.
+ * Namespaces Tab offers at the namespace position: the prefix matches, with the
+ * namespace of the current tab first so `pods ` + Tab lands somewhere useful.
+ */
+export function namespaceCandidates(
+  fragment: string,
+  namespaces: string[],
+  preferred?: string | null,
+): string[] {
+  const lower = fragment.toLowerCase();
+  const matches = namespaces.filter((name) => name.toLowerCase().startsWith(lower)).sort();
+  if (preferred == null) return matches;
+  const index = matches.indexOf(preferred);
+  if (index <= 0) return matches;
+  return [preferred, ...matches.slice(0, index), ...matches.slice(index + 1)];
+}
+
+/**
+ * Tab completion. `selected` is the label of the highlighted list entry, so a
+ * resource follows the cursor rather than the first hit. At the namespace
+ * position it walks through `namespaceCandidates`, one entry per Tab.
  */
 export function completeSearch(
   query: string,
   targets: CrTarget[],
   namespaces: string[] = [],
   selected?: string | null,
+  step = 0,
+  preferred?: string | null,
 ): string | null {
   const trimmed = query.trim();
   if (trimmed === "") return null;
   const plan = planSearch(query, targets, namespaces);
-  if (plan.namespacePrefix != null) {
-    const best = completeNamespace(plan.namespacePrefix, namespaces);
-    if (best == null || best === plan.namespacePrefix) return null;
-    return `${plan.text} ${best}`;
+  if (plan.namespaceSlot && plan.namespaceFragment != null) {
+    const candidates = namespaceCandidates(plan.namespaceFragment, namespaces, preferred);
+    if (candidates.length === 0) return null;
+    return `${plan.text} ${candidates[step % candidates.length]}`;
   }
   const label = (selected ?? "").toLowerCase();
   if (label === "") {

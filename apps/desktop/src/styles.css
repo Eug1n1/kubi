@@ -816,3 +816,21 @@ button.icon svg { display: block; }
 .search-list { max-height: 320px; overflow: auto; display: flex; flex-direction: column; }
 .search-list button { text-align: left; display: flex; justify-content: space-between; }
 .search-list button.on { background: var(--selected); }
+/* Namespace suggestions in the spotlight, offered at the namespace position. */
+.ns-hints {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--separator);
+}
+.ns-hints button {
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--field);
+  color: var(--muted);
+  font-size: 11px;
+}
+.ns-hints button:hover { color: var(--text); }
+.ns-hints button.on { background: var(--selected); color: var(--text); }
