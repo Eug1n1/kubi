@@ -22,7 +22,7 @@ import {
   type SearchHit,
 } from "./catalog";
 import { columnKey, columnsFor, compareRows, fieldText, type Field } from "./columns";
-import { clusterColor, formatAge, formatBytes, formatBytesPair, formatCpu, formatCpuPair, initials, liveAge, previewValue } from "./format";
+import { formatAge, formatBytes, formatBytesPair, formatCpu, formatCpuPair, liveAge, previewValue } from "./format";
 import { objectTemplate } from "./templates";
 import { ExecPane } from "./execWindow";
 import { LogPane } from "./logWindow";
@@ -228,29 +228,6 @@ export function TopBar({ kubi }: { kubi: Kubi }) {
         </div>
       ))}
     </header>
-  );
-}
-
-export function Hotbar({ kubi }: { kubi: Kubi }) {
-  return (
-    <aside className="hotbar">
-      <div className="chips">
-        {kubi.contexts.map((item) => (
-          <button
-            key={item.name}
-            className={item.name === kubi.context ? "chip active" : "chip"}
-            title={item.cluster ? `${item.name}\n${item.cluster}` : item.name}
-            onClick={() => kubi.switchContext(item.name)}
-          >
-            <i className="strip" style={{ background: clusterColor(item.name) }} />
-            {initials(item.name)}
-          </button>
-        ))}
-      </div>
-      <button className="add" title="Open kubeconfig" onClick={() => void kubi.openKubeconfig()}>
-        +
-      </button>
-    </aside>
   );
 }
 

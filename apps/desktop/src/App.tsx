@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ContextRail } from "./contexts";
 import { useKubi } from "./useKubi";
 import { argoInstalled } from "./catalog";
 import {
@@ -6,7 +7,6 @@ import {
   CreateModal,
   DeleteModal,
   Detail,
-  Hotbar,
   ForwardBar,
   ForwardDialog,
   SessionDrawer,
@@ -25,7 +25,7 @@ export function App() {
   return (
     <div className="app">
       <TopBar kubi={kubi} />
-      <Hotbar kubi={kubi} />
+      <ContextRail kubi={kubi} />
       <Sidebar kubi={kubi} />
       <main className="main">
         <div className="workspace">

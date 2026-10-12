@@ -72,6 +72,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .error-banner button { flex: none; }
 
 .hotbar {
+  position: relative;
   background: var(--chrome);
   border-right: 1px solid var(--separator);
   display: flex;
@@ -86,6 +87,21 @@ button:disabled { opacity: 0.5; cursor: default; }
   align-items: center;
   gap: 6px;
   padding: 8px 0;
+}
+.chips-block {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.chips-block + .chips-block { margin-top: 4px; }
+.chips-sep {
+  display: block;
+  width: 20px;
+  height: 1px;
+  margin-bottom: 2px;
+  background: var(--separator);
 }
 .chip {
   width: 36px;
@@ -105,6 +121,164 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .chip.active { outline: 1.5px solid var(--accent); outline-offset: -1.5px; }
 .hotbar .add { margin: 8px auto; width: 28px; height: 28px; }
+
+/* The context window: slides open on hover, or stays put while dragging. */
+.hotbar .panel {
+  position: absolute;
+  left: 100%;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  overflow: hidden;
+  z-index: 30;
+  transition: width 0.18s ease;
+}
+.hotbar:hover .panel,
+.hotbar.open .panel { width: 268px; }
+.hotbar .panel .inner {
+  width: 268px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--chrome);
+  border-right: 1px solid var(--separator);
+  box-shadow: 8px 0 20px rgba(0, 0, 0, 0.35);
+}
+.hotbar .panel header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--separator);
+  font-weight: 700;
+}
+.hotbar .panel header .muted { margin-left: auto; font-weight: 400; }
+.panel-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 0 10px;
+}
+.folder { padding: 0 6px; }
+.folder-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px;
+  border-radius: 3px;
+  border: 1px dashed transparent;
+}
+.folder-head.drop { border-color: var(--accent); background: rgba(55, 142, 240, 0.14); }
+.folder-head .twist {
+  width: 18px;
+  padding: 0;
+  color: var(--muted);
+}
+.folder-head .folder-name {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  font-weight: 600;
+  padding: 2px 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-head .icon { width: 20px; height: 20px; color: var(--muted); }
+.folder-head .icon:hover { color: var(--text); }
+.folder-edit {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  background: var(--field);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+}
+.items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 22px;
+  padding: 2px 4px 6px 22px;
+  border: 1px dashed transparent;
+  border-radius: 3px;
+}
+.items.drop { border-color: var(--accent); background: rgba(55, 142, 240, 0.1); }
+.items .hint {
+  margin: 2px 0 2px 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.ctx {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 6px 4px 10px;
+  border-radius: 3px;
+  text-align: left;
+  overflow: hidden;
+}
+.ctx .strip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+}
+.ctx .ctx-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx .muted {
+  margin-left: auto;
+  max-width: 96px;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx.active { background: var(--selected); }
+.ctx.held { opacity: 0.4; }
+.hotbar .panel footer {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--separator);
+}
+.panel footer .ghost {
+  text-align: left;
+  color: var(--muted);
+}
+.panel footer .ghost:hover { color: var(--text); }
+.panel footer .bad { margin: 0; font-size: 11px; }
+.ctx-ghost {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  padding: 4px 8px 4px 10px;
+  background: var(--field);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.ctx-ghost .strip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+}
 
 .nav {
   border-right: 1px solid var(--separator);

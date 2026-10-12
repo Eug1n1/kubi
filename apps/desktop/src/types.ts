@@ -50,6 +50,13 @@ export type ContextInfo = {
   current: boolean;
 };
 
+/** A folder the user made in the context rail. A context lives in one folder at most. */
+export type ContextGroup = {
+  id: string;
+  name: string;
+  contexts: string[];
+};
+
 export type ResourceRow = {
   uid: string;
   name: string;
