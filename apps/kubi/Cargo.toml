@@ -1,8 +1,0 @@
-[package]
-name = "kubi"
-version.workspace = true
-edition.workspace = true
-publish.workspace = true
-
-[dependencies]
-kubi-ui = { workspace = true }
