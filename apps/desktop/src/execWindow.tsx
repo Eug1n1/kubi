@@ -31,11 +31,23 @@ export function ExecTerm({
     const node = host.current;
     if (!node) return;
     const release = api.current.bind;
+    // Follow the active theme instead of hardcoding a palette.
+    const token = (name: string, fallback: string) =>
+      getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
     const terminal = new Terminal({
       fontSize: 12,
       fontFamily: "ui-monospace, monospace",
       cursorBlink: true,
-      theme: { background: "#1e1e1e", foreground: "#dedede", cursor: "#378ef0" },
+      theme: {
+        background: token("--field", "#2a2a2a"),
+        foreground: token("--fg", "#e8e8e8"),
+        cursor: token("--accent", "#4c8dff"),
+        selectionBackground: token("--selected", "#3d3d3d"),
+        black: token("--bg", "#181818"),
+        brightBlack: token("--dim", "#8c8c8c"),
+        white: token("--fg", "#e8e8e8"),
+        brightWhite: token("--fg", "#e8e8e8"),
+      },
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);

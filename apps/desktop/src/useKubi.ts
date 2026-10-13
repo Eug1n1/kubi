@@ -3,7 +3,17 @@ import { emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { cursorPosition, getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
-import { send } from "./api";
+import { readSettingsFile, send, writeSettingsFile } from "./api";
+import {
+  DEFAULT_KEYMAP,
+  isTypedKey,
+  matchesBinding,
+  type Binding,
+  type Keymap,
+  type KeymapAction,
+} from "./keymap";
+import { parsePrefs, serializePrefs } from "./prefs";
+import { DEFAULT_THEME, applyTheme, type Theme } from "./theme";
 import type {
   AppEvent,
   ClusterOverview,
@@ -28,7 +38,7 @@ import type {
   WatchTarget,
 } from "./types";
 import { eventKey, sameTarget, sameView, watchOf } from "./types";
-import { canExec, canForward, canLogs, canRestart, logTitle, viewTitle } from "./catalog";
+import { canExec, canForward, canLogs, canRestart, logTitle, podSettled, viewTitle } from "./catalog";
 
 type HistPoint = { t: number; cpu: number; mem: number };
 
@@ -149,6 +159,11 @@ export function useKubi() {
   const [metricsNote, setMetricsNote] = useState<string | null>(null);
   const [history, setHistory] = useState<HistPoint[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [keymap, setKeymap] = useState<Keymap>(DEFAULT_KEYMAP);
+  const [theme, setTheme] = useState<Theme>(DEFAULT_THEME);
+  /** Set by the open list so the filter shortcut has somewhere to point. */
+  const focusFilter = useRef<(() => void) | null>(null);
   const [warnings, setWarnings] = useState<{ scope: string | null; byUid: Record<string, ObjectWarning> }>({
     scope: null,
     byUid: {},
@@ -1273,17 +1288,70 @@ export function useKubi() {
   }, [active, context]);
 
   useEffect(() => {
+    let stop = false;
+    void readSettingsFile()
+      .then((text) => {
+        if (stop) return;
+        const prefs = parsePrefs(text);
+        setKeymap(prefs.keymap);
+        setTheme(prefs.theme);
+      })
+      .catch(() => {
+        if (!stop) pushError("Settings could not be read");
+      });
+    return () => {
+      stop = true;
+    };
+  }, []);
+
+  // The whole UI re-themes from CSS custom properties.
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
+
+  function persist(nextKeymap: Keymap, nextTheme: Theme) {
+    void writeSettingsFile(serializePrefs({ keymap: nextKeymap, theme: nextTheme })).catch(() =>
+      pushError("Settings could not be saved"),
+    );
+  }
+
+  /** Applies a change immediately, keeping the running state even if the write fails. */
+  function commitKeymap(next: Keymap) {
+    setKeymap(next);
+    persist(next, theme);
+  }
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "a") {
-        if (!searchOpen) {
-          event.preventDefault();
-          setSearchOpen(true);
-        }
+      // While settings is open its recorder owns the keyboard.
+      if (settingsOpen) return;
+      const node = event.target as HTMLElement | null;
+      const typing =
+        node != null &&
+        (node.isContentEditable ||
+          node.tagName === "INPUT" ||
+          node.tagName === "TEXTAREA" ||
+          node.tagName === "SELECT");
+      if (!searchOpen && matchesBinding(event, keymap.openSearch)) {
+        event.preventDefault();
+        setSearchOpen(true);
+        return;
+      }
+      if (matchesBinding(event, keymap.openSettings)) {
+        event.preventDefault();
+        setSettingsOpen(true);
+        return;
+      }
+      // A modified binding is safe anywhere; a bare key would eat typing.
+      const filter = keymap.focusFilter;
+      if (matchesBinding(event, filter) && (typing ? !isTypedKey(filter) : true)) {
+        event.preventDefault();
+        focusFilter.current?.();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [searchOpen]);
+  }, [searchOpen, settingsOpen, keymap]);
 
   const activeTab = active == null ? null : (tabs[active] ?? null);
   const activeNamespace = activeTab?.namespace ?? null;
@@ -1606,7 +1674,37 @@ export function useKubi() {
       return tab?.pane === "exec" ? tab.text : "";
     },
     setSearchOpen,
-    warning: (uid: string) => scopeWarnings?.[uid] ?? null,
+    settingsOpen,
+    setSettingsOpen,
+    keymap,
+    setBinding: (action: KeymapAction, next: Binding) => {
+      commitKeymap({ ...keymap, [action]: next });
+    },
+    resetBinding: (action: KeymapAction) => {
+      commitKeymap({ ...keymap, [action]: DEFAULT_KEYMAP[action] });
+    },
+    resetKeymap: () => commitKeymap(DEFAULT_KEYMAP),
+    theme,
+    updateTheme: (patch: Partial<Theme>) => {
+      const next = { ...theme, ...patch };
+      setTheme(next);
+      persist(keymap, next);
+    },
+    resetTheme: () => {
+      setTheme(DEFAULT_THEME);
+      persist(keymap, DEFAULT_THEME);
+    },
+    bindFilter: (focus: (() => void) | null) => {
+      focusFilter.current = focus;
+    },
+    /** Warning marker for a row, hiding probe noise from a pod that is up again. */
+    warning: (row: ResourceRow) => {
+      const item = scopeWarnings?.[row.uid];
+      if (item == null) return null;
+      const pods = activeTab?.view.kind === "resource" && activeTab.view.resource === "pods";
+      if (pods && item.probeOnly && podSettled(row)) return null;
+      return item;
+    },
     openNamed: (target: CrTarget, namespace: string, name: string) => {
       const watch: WatchTarget = { custom: target };
       session.current.pending = { target: watch, namespace, name };

@@ -23,7 +23,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             send_command,
             load_context_groups,
-            save_context_groups
+            save_context_groups,
+            load_settings,
+            save_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running Kubi");
@@ -34,17 +36,17 @@ fn send_command(sender: tauri::State<'_, CoreSender>, command: Command) {
     sender.send(command);
 }
 
-/// The context rail folders live in the app config directory, so they survive
-/// both dev runs and bundled builds.
-fn groups_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+/// UI state lives in the app config directory, so it survives both dev runs and
+/// bundled builds.
+fn config_file(app: &tauri::AppHandle, name: &str) -> Result<PathBuf, String> {
     app.path()
         .app_config_dir()
-        .map(|dir| dir.join("context-groups.json"))
+        .map(|dir| dir.join(name))
         .map_err(|err| format!("config dir: {err}"))
 }
 
 /// Stored JSON, or `None` before the first save.
-fn read_groups(path: &Path) -> Result<Option<String>, String> {
+fn read_config(path: &Path) -> Result<Option<String>, String> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -52,8 +54,8 @@ fn read_groups(path: &Path) -> Result<Option<String>, String> {
     }
 }
 
-/// Replaced through a temporary file so a crash cannot truncate the layout.
-fn write_groups(path: &Path, data: &str) -> Result<(), String> {
+/// Replaced through a temporary file so a crash cannot truncate the contents.
+fn write_config(path: &Path, data: &str) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|err| format!("create {}: {err}", dir.display()))?;
     }
@@ -64,12 +66,22 @@ fn write_groups(path: &Path, data: &str) -> Result<(), String> {
 
 #[tauri::command]
 fn load_context_groups(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    read_groups(&groups_file(&app)?)
+    read_config(&config_file(&app, "context-groups.json")?)
 }
 
 #[tauri::command]
 fn save_context_groups(app: tauri::AppHandle, data: String) -> Result<(), String> {
-    write_groups(&groups_file(&app)?, &data)
+    write_config(&config_file(&app, "context-groups.json")?, &data)
+}
+
+#[tauri::command]
+fn load_settings(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    read_config(&config_file(&app, "settings.json")?)
+}
+
+#[tauri::command]
+fn save_settings(app: tauri::AppHandle, data: String) -> Result<(), String> {
+    write_config(&config_file(&app, "settings.json")?, &data)
 }
 
 #[cfg(test)]
@@ -77,7 +89,7 @@ mod tests {
     use super::*;
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("kubi-groups-{tag}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kubi-config-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -85,20 +97,25 @@ mod tests {
     #[test]
     fn missing_file_reads_as_none() {
         let dir = temp_dir("missing");
-        assert!(read_groups(&dir.join("context-groups.json")).unwrap().is_none());
+        assert!(read_config(&dir.join("context-groups.json")).unwrap().is_none());
+        assert!(read_config(&dir.join("settings.json")).unwrap().is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn writes_then_reads_and_leaves_no_temp_file() {
         let dir = temp_dir("roundtrip");
-        let path = dir.join("context-groups.json");
-        let data = r#"{"version":1,"groups":[{"id":"g1","name":"kz","contexts":["kz-mgmt"]}]}"#;
-        write_groups(&path, data).unwrap();
-        assert_eq!(read_groups(&path).unwrap().as_deref(), Some(data));
+        let path = dir.join("settings.json");
+        let data = r#"{"version":1,"keybindings":{"openSearch":{"key":"a"}}}"#;
+        write_config(&path, data).unwrap();
+        assert_eq!(read_config(&path).unwrap().as_deref(), Some(data));
+        // A second file in the same directory is untouched.
+        let other = dir.join("context-groups.json");
+        write_config(&other, "{}").unwrap();
+        assert_eq!(read_config(&path).unwrap().as_deref(), Some(data));
         assert!(!path.with_extension("json.tmp").exists());
-        write_groups(&path, "{}").unwrap();
-        assert_eq!(read_groups(&path).unwrap().as_deref(), Some("{}"));
+        write_config(&path, "{}").unwrap();
+        assert_eq!(read_config(&path).unwrap().as_deref(), Some("{}"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

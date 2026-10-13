@@ -3,3 +3,9 @@
 .DS_Store
 node_modules
 dist
+
+# Visual harness output (see apps/desktop/preview/gallery.tsx)
+apps/desktop/preview/*.cjs
+apps/desktop/preview/*.css
+apps/desktop/preview/*.html
+apps/desktop/preview/shots-*/

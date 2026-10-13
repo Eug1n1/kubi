@@ -69,15 +69,16 @@ export function initials(name: string): string {
   return letters.toUpperCase() || "?";
 }
 
+/* Context strip hues: mid-lightness, so they read on the dark chrome. */
 const CLUSTER_COLORS = [
-  "#5b8def",
-  "#3ecf8e",
-  "#f5a524",
-  "#c478e8",
-  "#48bed2",
-  "#e8708a",
-  "#78a860",
-  "#e67e50",
+  "#4c8dff",
+  "#3fb950",
+  "#d29922",
+  "#a371f7",
+  "#39c5cf",
+  "#f778ba",
+  "#7ee787",
+  "#ff9e64",
 ];
 
 export function clusterColor(name: string): string {

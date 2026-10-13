@@ -1,4 +1,4 @@
-import type { CrTarget, ResourceKind, View } from "./types";
+import type { CrTarget, EventInfo, ResourceKind, ResourceRow, View } from "./types";
 
 export const TITLES: Record<ResourceKind, string> = {
   nodes: "Nodes",
@@ -439,4 +439,41 @@ export function completeSearch(
   const text = plan.text.toLowerCase();
   if (label === text) return null;
   return plan.namespace == null ? `${label} ` : `${label} ${plan.namespace}`;
+}
+
+/** A failing readiness/liveness/startup probe, which is noise once a pod is up. */
+export function isProbeWarning(event: EventInfo): boolean {
+  const reason = event.reason.toLowerCase();
+  const message = event.message.toLowerCase();
+  if (reason === "unhealthy" || reason === "probewarning") return true;
+  return (
+    message.includes("probe") &&
+    (message.includes("failed") || message.includes("errored") || message.includes("timed out"))
+  );
+}
+
+/**
+ * A pod that is past its startup: running with every container ready, or
+ * finished outright. Probe failures from before that point say nothing now.
+ */
+export function podSettled(row: ResourceRow): boolean {
+  if (row.status === "Succeeded") return true;
+  if (row.status !== "Running") return false;
+  const [ready, total] = row.ready.split("/");
+  if (ready == null || total == null || ready === "" || total === "") return false;
+  return ready === total && Number(ready) > 0;
+}
+
+/**
+ * Events worth showing for the selected object. Probe failures of a pod that is
+ * running again are dropped: they described a startup that has since finished.
+ */
+export function visibleEvents(
+  kind: ResourceKind | null,
+  row: ResourceRow | null,
+  events: EventInfo[] | null,
+): EventInfo[] {
+  const list = events ?? [];
+  if (kind !== "pods" || row == null || !podSettled(row)) return list;
+  return list.filter((event) => !(event.kind === "Warning" && isProbeWarning(event)));
 }

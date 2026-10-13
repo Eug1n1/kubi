@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ContextRail } from "./contexts";
+import { SettingsModal } from "./settings";
 import { useKubi } from "./useKubi";
 import { argoInstalled } from "./catalog";
 import {
@@ -41,6 +42,7 @@ export function App() {
       {kubi.searchOpen ? <SearchModal kubi={kubi} /> : null}
       {kubi.createOpen ? <CreateModal kubi={kubi} /> : null}
       {kubi.pendingDelete ? <DeleteModal kubi={kubi} /> : null}
+      {kubi.settingsOpen ? <SettingsModal kubi={kubi} /> : null}
     </div>
   );
 }

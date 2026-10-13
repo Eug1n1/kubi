@@ -109,6 +109,8 @@ export type ObjectWarning = {
   reason: string;
   count: number;
   ageSecs: number | null;
+  /** True when nothing but probe failures was reported for the object. */
+  probeOnly: boolean;
 };
 
 /** One event the cluster attached to the selected object. */

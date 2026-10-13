@@ -32,17 +32,28 @@ export function columnKey(field: Field): string {
   return keyOf(field);
 }
 
+/** Numbers read better right-aligned and in a monospace face. */
+export function isNumericField(field: Field): boolean {
+  if (field === "cpu" || field === "memory" || field === "age") return true;
+  return typeof field === "object" && field.cell === "restarts";
+}
+
 export function columnsFor(view: View): Col[] {
-  const cols: Col[] = [col("Name", "name", false, 220)];
+  // Widths are weights: the table is fixed-layout, so a narrow window shrinks
+  // columns proportionally and truncates instead of scrolling sideways.
+  const cols: Col[] = [col("Name", "name", false, 300)];
   const namespaced = view.kind === "custom" ? view.target.namespaced : view.kind === "resource" ? isNamespaced(view.resource) : false;
-  if (namespaced) cols.push(col("Namespace", "namespace", false, 140));
+  if (namespaced) cols.push(col("Namespace", "namespace", false, 112));
   const kind: ResourceKind | null = view.kind === "resource" ? view.resource : null;
   const middle = middleColumns(kind);
+  let columns = 0;
   for (const [title, field, colored] of middle) {
-    const width = field === "cpu" || field === "memory" ? 110 : 140;
-    cols.push(col(title, field, colored, width));
+    // Give the first two data columns more room than the trailing ones.
+    const weight = field === "memory" ? 118 : field === "cpu" ? 112 : columns === 0 ? 150 : columns < 3 ? 74 : 96;
+    columns += 1;
+    cols.push(col(title, field, colored, weight));
   }
-  cols.push(col("Age", "age", false, 72));
+  cols.push(col("Age", "age", false, 60));
   return cols;
 }
 

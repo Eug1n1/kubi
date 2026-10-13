@@ -13,3 +13,12 @@ export function readGroupsFile(): Promise<string | null> {
 export function writeGroupsFile(data: string): Promise<void> {
   return invoke("save_context_groups", { data });
 }
+
+/** App settings as stored JSON, or null before the first save. */
+export function readSettingsFile(): Promise<string | null> {
+  return invoke<string | null>("load_settings");
+}
+
+export function writeSettingsFile(data: string): Promise<void> {
+  return invoke("save_settings", { data });
+}

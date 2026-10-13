@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as Rea
 import { createPortal } from "react-dom";
 import type { Kubi } from "./useKubi";
 import type { ArgoApp, DataEntry, EventInfo, ObjectWarning, ResourceKind, ResourceRow } from "./types";
+import { bindingKeys } from "./keymap";
 import {
   NAV,
   TITLES,
@@ -22,10 +23,11 @@ import {
   supportsMetrics,
   viewAcceptsNamespace,
   viewTitle,
+  visibleEvents,
   type SearchHit,
 } from "./catalog";
-import { columnKey, columnsFor, compareRows, fieldText, type Field } from "./columns";
-import { formatAge, formatBytes, formatBytesPair, formatCpu, formatCpuPair, liveAge, previewValue } from "./format";
+import { columnKey, columnsFor, compareRows, fieldText, isNumericField, type Field } from "./columns";
+import { clusterColor, formatAge, formatBytes, formatBytesPair, formatCpu, formatCpuPair, liveAge, previewValue } from "./format";
 import { objectTemplate } from "./templates";
 import { ExecPane } from "./execWindow";
 import { LogPane } from "./logWindow";
@@ -198,7 +200,7 @@ function TabGhost({ live, className, label }: { live: DragLive; className: strin
 }
 
 function Group({ title, count, indent = 0, children }: { title: string; count: number; indent?: number; children: ReactNode }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   return (
     <div>
       <button className="group" style={{ paddingLeft: 10 + indent }} onClick={() => setOpen((value) => !value)}>
@@ -212,15 +214,29 @@ function Group({ title, count, indent = 0, children }: { title: string; count: n
 }
 
 export function TopBar({ kubi }: { kubi: Kubi }) {
+  const context = kubi.context;
   return (
     <header className="topbar">
       <div className="topbar-row">
-        <span>{kubi.context ?? "No cluster"}</span>
+        <span className="brand">Kubi</span>
+        <span className="ctx-chip" title={context ? `Context: ${context}` : "No context selected"}>
+          <i className="dot" style={{ background: context ? clusterColor(context) : "var(--dim)" }} />
+          {context ?? "no cluster"}
+        </span>
+        {kubi.connecting ? <span className="muted">connecting…</span> : null}
+        <span className="spacer" />
         <button onClick={kubi.refresh} disabled={kubi.refreshing} aria-busy={kubi.refreshing}>
           {kubi.refreshing ? <i className="spin" /> : null}
           Refresh
         </button>
-        <span className="spacer" />
+        <button
+          className="icon"
+          title="Settings"
+          aria-label="Settings"
+          onClick={() => kubi.setSettingsOpen(true)}
+        >
+          <GearIcon />
+        </button>
       </div>
       {kubi.errors.map((message, index) => (
         <div key={`${index}-${message.slice(0, 24)}`} className="error-banner">
@@ -381,25 +397,16 @@ export function ResourceScreen({ kubi }: { kubi: Kubi }) {
   const gesture = useTabDrag();
   const strip = useRef<HTMLDivElement>(null);
   const filterBox = useRef<HTMLInputElement>(null);
-  const modal = kubi.searchOpen || kubi.createOpen || kubi.pendingDelete != null || kubi.forwardDraft != null;
+  // The filter shortcut is part of the keymap, so the window hands us the focus
+  // callback instead of handling the key itself.
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "/" || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
-      const node = event.target as HTMLElement | null;
-      if (
-        node != null &&
-        (node.isContentEditable || node.tagName === "INPUT" || node.tagName === "TEXTAREA" || node.tagName === "SELECT")
-      ) {
-        return;
-      }
-      if (modal) return;
-      event.preventDefault();
+    kubi.bindFilter(() => {
       filterBox.current?.focus();
       filterBox.current?.select();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [modal]);
+    });
+    return () => kubi.bindFilter(null);
+    // Registered once: the callback only touches the input ref above.
+  }, []);
   const tab = kubi.activeTab;
   if (!tab) return null;
   const kind: ResourceKind | null = tab.view.kind === "resource" ? tab.view.resource : null;
@@ -472,9 +479,9 @@ export function ResourceScreen({ kubi }: { kubi: Kubi }) {
           ref={filterBox}
           className={match.invalid ? "filter invalid" : "filter"}
           value={tab.filter}
-          placeholder="Filter (regex, / to focus)"
+          placeholder="Filter (regex)"
           aria-label="Filter rows"
-          title="Case-insensitive regular expression"
+          title={`Case-insensitive regular expression · ${bindingKeys(kubi.keymap.focusFilter).join("+")} focuses it`}
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
@@ -486,7 +493,7 @@ export function ResourceScreen({ kubi }: { kubi: Kubi }) {
             literal
           </span>
         ) : null}
-        <span className="muted">{visibleRows(tab).length}</span>
+        <span className="count">{visibleRows(tab).length}</span>
         <span className="spacer" />
         {kind && canLogs(kind) && selected ? (
           <IconButton label="Logs" onClick={kubi.openLogs}>
@@ -575,7 +582,12 @@ function ObjectTable({ kubi }: { kubi: Kubi }) {
         <thead>
           <tr>
             {cols.map((col) => (
-              <th key={col.title} style={{ minWidth: col.width }} onClick={() => kubi.toggleSort(columnKey(col.field))}>
+              <th
+                key={col.title}
+                className={isNumericField(col.field) ? "num" : undefined}
+                style={{ width: col.width }}
+                onClick={() => kubi.toggleSort(columnKey(col.field))}
+              >
                 {col.title}
                 {tab.sortKey === columnKey(col.field) ? (tab.sortAsc ? " ↑" : " ↓") : ""}
               </th>
@@ -611,9 +623,14 @@ function ObjectTable({ kubi }: { kubi: Kubi }) {
               }}
             >
               {cols.map((col) => {
-                const warning = col.field === "name" ? kubi.warning(row.uid) : null;
+                const warning = col.field === "name" ? kubi.warning(row) : null;
                 return (
-                  <td key={col.title} style={{ minWidth: col.width, color: col.colored ? tone(row.tone) : undefined }}>
+                  <td
+                    key={col.title}
+                    className={isNumericField(col.field) ? "num" : undefined}
+                    title={col.field === "name" ? row.name : undefined}
+                    style={{ width: col.width, color: col.colored ? tone(row.tone) : undefined }}
+                  >
                     {col.colored ? <i className="dot" style={{ background: tone(row.tone) }} /> : null}
                     {warning ? <WarningMark warning={warning} /> : null}
                     {fieldText(row, col.field, liveAge(row.ageSecs, tab.observedAt, kubi.now))}
@@ -645,6 +662,22 @@ function WarningMark({ warning }: { warning: ObjectWarning }) {
   );
 }
 
+/** Settings: a gear, matching the stroke of the other icons. */
+function GearIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <path
+        d="M8 1.9v1.6M8 12.5v1.6M2.9 8h1.6M11.5 8h1.6M4.4 4.4l1.1 1.1M10.5 10.5l1.1 1.1M11.6 4.4l-1.1 1.1M5.5 10.5l-1.1 1.1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 function WarnIcon() {
   return (
     <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
@@ -663,7 +696,10 @@ export function Detail({ kubi, width, onWidth }: { kubi: Kubi; width: number; on
   const dragging = useRef<{ x: number; width: number } | null>(null);
   // Events load with the selection, so warnings are on hand before the tab is opened.
   const events = tab.eventsFor === row.uid ? tab.events : null;
-  const warnings = (events ?? []).filter((event) => event.kind === "Warning");
+  // Probe failures of a pod that is running again say nothing about now.
+  const shown = visibleEvents(kind, row, events);
+  const warnings = shown.filter((event) => event.kind === "Warning");
+  const hidden = (events?.length ?? 0) - shown.length;
   return (
     <aside className="detail" style={{ width }}>
       <button
@@ -758,7 +794,7 @@ export function Detail({ kubi, width, onWidth }: { kubi: Kubi; width: number; on
           <DataTab kubi={kubi} secret={kind != null && isSecret(kind)} ready={tab.dataFor === tab.selected} entries={tab.data} />
         ) : null}
         {tab.detailTab === "events" ? (
-          <EventsTab ready={tab.eventsFor === tab.selected} events={tab.events} />
+          <EventsTab ready={tab.eventsFor === tab.selected} events={shown} hidden={hidden} />
         ) : null}
         {tab.detailTab === "metrics" ? <Metrics kubi={kubi} row={row} /> : null}
       </div>
@@ -1375,18 +1411,18 @@ function RingCard({ title, value, total, legend }: { title: string; value: numbe
       <h2>{title}</h2>
       <div className="ring">
         <svg width="96" height="96" viewBox="0 0 96 96">
-          <circle cx="48" cy="48" r={radius} fill="none" stroke="#3e3e3e" strokeWidth="6" />
+          <circle cx="48" cy="48" r={radius} fill="none" stroke="#232c39" strokeWidth="6" />
           <circle
             cx="48"
             cy="48"
             r={radius}
             fill="none"
-            stroke="#6ab07a"
+            stroke="#3fb950"
             strokeWidth="6"
             strokeDasharray={`${circumference * ratio} ${circumference}`}
             transform="rotate(-90 48 48)"
           />
-          <text x="48" y="52" textAnchor="middle" fill="#dedede" fontSize="12">
+          <text x="48" y="52" textAnchor="middle" fill="#e6ebf2" fontSize="12">
             {value}/{total}
           </text>
         </svg>
@@ -1941,14 +1977,30 @@ function EventRow({ event, showType = true }: { event: EventInfo; showType?: boo
   );
 }
 
-function EventsTab({ ready, events }: { ready: boolean; events: EventInfo[] | null }) {
+function EventsTab({
+  ready,
+  events,
+  hidden,
+}: {
+  ready: boolean;
+  events: EventInfo[] | null;
+  hidden: number;
+}) {
   if (!ready || events == null) return <p className="muted">Loading events…</p>;
-  if (events.length === 0) return <p className="muted">No events for this object.</p>;
   return (
     <div>
-      {events.map((event, index) => (
-        <EventRow event={event} key={`${event.reason}-${event.ageSecs ?? "?"}-${index}`} />
-      ))}
+      {events.length === 0 ? (
+        <p className="muted">No events for this object.</p>
+      ) : (
+        events.map((event, index) => (
+          <EventRow event={event} key={`${event.reason}-${event.ageSecs ?? "?"}-${index}`} />
+        ))
+      )}
+      {hidden > 0 ? (
+        <p className="muted">
+          {hidden} probe warning{hidden === 1 ? "" : "s"} hidden — the pod is running.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -1964,9 +2016,9 @@ function Metrics({ kubi, row }: { kubi: Kubi; row: ResourceRow }) {
       {kubi.history.length > 0 ? (
         <>
           <p className="muted">CPU (millicores)</p>
-          <Chart points={kubi.history.map((point) => point.cpu)} color="#378ef0" />
+          <Chart points={kubi.history.map((point) => point.cpu)} color="#4c8dff" />
           <p className="muted">Memory (MiB)</p>
-          <Chart points={kubi.history.map((point) => point.mem / (1024 * 1024))} color="#6ab07a" />
+          <Chart points={kubi.history.map((point) => point.mem / (1024 * 1024))} color="#3fb950" />
           <p className="muted">CPU is usage versus requests. For nodes the second number is allocatable.</p>
         </>
       ) : null}
