@@ -269,6 +269,9 @@ pub struct ObjectWarning {
     /// Every occurrence counted together.
     pub count: u32,
     pub age_secs: Option<u64>,
+    /// True when nothing but probe failures was reported, so a pod that is up
+    /// again can drop the marker.
+    pub probe_only: bool,
 }
 
 /// One event from the object's own namespace, newest warnings first.

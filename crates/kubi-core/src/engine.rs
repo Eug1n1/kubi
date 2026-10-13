@@ -2189,6 +2189,18 @@ fn sort_events(events: &mut [EventInfo]) {
     });
 }
 
+/// A failing readiness/liveness/startup probe. Probe noise matters only while
+/// the pod is still coming up, so it is tracked apart from real trouble.
+fn is_probe_warning(event: &Event) -> bool {
+    let reason = event.reason.as_deref().unwrap_or("");
+    let message = event.message.as_deref().unwrap_or("").to_ascii_lowercase();
+    if reason.eq_ignore_ascii_case("Unhealthy") || reason.eq_ignore_ascii_case("ProbeWarning") {
+        return true;
+    }
+    message.contains("probe")
+        && (message.contains("failed") || message.contains("errored") || message.contains("timed out"))
+}
+
 /// How many objects with warnings the list scan reports.
 const WARNING_OBJECT_LIMIT: usize = 200;
 
@@ -2214,8 +2226,10 @@ fn aggregate_warnings(events: &[Event]) -> Vec<ObjectWarning> {
             reason: String::new(),
             count: 0,
             age_secs: None,
+            probe_only: true,
         });
         entry.count = entry.count.saturating_add(count);
+        entry.probe_only = entry.probe_only && is_probe_warning(event);
         let newer = match (entry.age_secs, age) {
             (None, Some(_)) => true,
             (Some(current), Some(age)) => age < current,
@@ -3561,5 +3575,40 @@ mod event_tests {
         let mut orphan = event("Orphan", "Warning", Some(ago(10)));
         orphan.count = Some(3);
         assert!(aggregate_warnings(&[orphan]).is_empty());
+    }
+
+    #[test]
+    fn probe_only_tracks_probe_trouble() {
+        let list = aggregate_warnings(&[
+            warning("Unhealthy", "u1", "pod-a", 4, Some(ago(30))),
+            warning("FailedMount", "u2", "pod-b", 1, Some(ago(30))),
+        ]);
+        let by_uid = |uid: &str| list.iter().find(|item| item.uid == uid).unwrap();
+        assert!(by_uid("u1").probe_only);
+        assert!(!by_uid("u2").probe_only);
+
+        // One real warning alongside a probe failure is enough to keep it.
+        let mixed = aggregate_warnings(&[
+            warning("Unhealthy", "u3", "pod-c", 9, Some(ago(10))),
+            warning("BackOff", "u3", "pod-c", 1, Some(ago(20))),
+        ]);
+        assert!(!mixed[0].probe_only);
+        assert_eq!(mixed[0].count, 10);
+        assert_eq!(mixed[0].reason, "Unhealthy");
+    }
+
+    #[test]
+    fn probe_messages_are_recognised() {
+        let mut by_message = event("SomeReason", "Warning", Some(ago(5)));
+        by_message.message = Some("Readiness probe errored: connection refused".to_string());
+        assert!(is_probe_warning(&by_message));
+
+        let mut normal = event("Scheduled", "Normal", Some(ago(5)));
+        normal.message = Some("Successfully assigned apps/pod to node-1".to_string());
+        assert!(!is_probe_warning(&normal));
+
+        let mut spec = event("FailedScheduling", "Warning", Some(ago(5)));
+        spec.message = Some("0/3 nodes are available: 3 Insufficient cpu".to_string());
+        assert!(!is_probe_warning(&spec));
     }
 }
