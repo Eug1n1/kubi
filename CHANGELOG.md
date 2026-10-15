@@ -11,6 +11,8 @@ shipped as.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-15
+
 ### Added
 
 - A cluster in a window of its own: `Open separately` in a context's
