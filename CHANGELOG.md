@@ -9,13 +9,17 @@ The `Unreleased` section holds what is on `main` but not in a release yet; on a
 and publishes them as one release, and the section moves under the version it
 shipped as.
 
-## [Unreleased]
+## [0.3.2] - 2026-10-16
+
+### Changed
+
+- The top-left brand is back to the uppercase `KUBI` wordmark; the cube icon is removed.
 
 ## [0.3.1] - 2026-10-16
 
 ### Changed
 
-- The top-left brand is back to the uppercase `KUBI` wordmark; the cube icon is removed.
+- The Kubi wordmark in the top-left corner is now the blue cube icon from the logo.
 
 ### Added
 
