@@ -11,7 +11,11 @@ shipped as.
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-10-16
+## [0.3.1] - 2026-10-16
+
+### Changed
+
+- The Kubi wordmark in the top-left corner is now the blue cube icon from the logo.
 
 ### Added
 
