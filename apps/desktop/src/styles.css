@@ -455,10 +455,12 @@ h1 { font-size: 18px; font-weight: 600; margin: 0; }
   color: var(--fg);
   padding: var(--sp2) 10px 5px;
 }
-/* A hairline between sections, so the eye lands on the title. */
+/* A hairline between sections. The gap that follows a title belongs to that
+   row's own padding, not to the next section's margin: otherwise a hovered
+   section is highlighted with a strip underneath it that stays dark. */
 .group.top {
-  margin-top: var(--sp2);
   padding-top: var(--sp3);
+  padding-bottom: 13px;
   border-top: 1px solid var(--border);
 }
 .group:hover { color: var(--fg); background: var(--hover); }
