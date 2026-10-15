@@ -251,11 +251,13 @@ const logs: LogSnapshot = {
 const panel = (title: string, body: string, wide = false) =>
   `<section class="pv"><h3>${title}</h3><div class="pv-frame${wide ? " wide" : ""}">${body}</div></section>`;
 
-const shell = (activeTab: Tab) => {
+const shell = (activeTab: Tab, rail = true) => {
   const kubi = kubiFor(activeTab);
-  return `<div class="app">${renderToStaticMarkup(<TopBar kubi={kubi} />)}${renderToStaticMarkup(
-    <ContextRail kubi={kubi} />,
-  )}${renderToStaticMarkup(<Sidebar kubi={kubi} />)}<main class="main">${renderToStaticMarkup(
+  return `<div class="app${rail ? "" : " no-rail"}">${renderToStaticMarkup(<TopBar kubi={kubi} />)}${
+    rail ? renderToStaticMarkup(<ContextRail kubi={kubi} />) : ""
+  }${renderToStaticMarkup(
+    <Sidebar kubi={kubi} />,
+  )}<main class="main">${renderToStaticMarkup(
     <ResourceScreen kubi={kubi} />,
   )}</main></div>`;
 };
@@ -322,6 +324,7 @@ ${extra}
 
 const pages: [string, string, string?][] = [
   ["Shell — topbar, context rail, sidebar, object list", shell(tab("overview", null))],
+  ["Context window — shell without the rail", shell(tab("overview", null), false)],
   ["Object list — pods", listOnly()],
   ["Detail — overview with warnings", detail("overview")],
   ["Detail — events", detail("events")],

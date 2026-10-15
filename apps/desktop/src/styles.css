@@ -157,6 +157,12 @@ p,
   grid-template-columns: var(--rail) var(--sidebar) minmax(0, 1fr);
   background: var(--bg);
 }
+/* A context window renders no rail: the nav takes the first column and the
+   workspace gets the rest, or the nav would land in the rail's column and
+   the workspace in the nav's. */
+.app.no-rail {
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+}
 
 /* ------------------------------------------------------------------ topbar */
 

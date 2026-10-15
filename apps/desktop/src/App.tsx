@@ -25,7 +25,7 @@ export function App({ pinned = null }: { pinned?: string | null }) {
   const [logHeight, setLogHeight] = useState(240);
   const argo = kubi.active == null && kubi.home === "argo" && argoInstalled(kubi.customResources);
   return (
-    <div className="app">
+    <div className={pinned == null ? "app" : "app no-rail"}>
       <TopBar kubi={kubi} />
       {/* A context window is pinned to one cluster: there is no rail, the
           window title and the topbar chip say which cluster it is. */}
