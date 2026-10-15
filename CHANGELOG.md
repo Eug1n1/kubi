@@ -11,6 +11,10 @@ shipped as.
 
 ## [Unreleased]
 
+### Fixed
+
+- The top-left cube icon is no longer vertically squashed and its colors now match the logo.
+
 ## [0.3.1] - 2026-10-16
 
 ### Changed
