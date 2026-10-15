@@ -877,16 +877,24 @@ export function Detail({ kubi, width, onWidth }: { kubi: Kubi; width: number; on
 function IconButton({
   label,
   danger,
+  disabled,
   onClick,
   children,
 }: {
   label: string;
   danger?: boolean;
+  disabled?: boolean;
   onClick: () => void;
   children: ReactNode;
 }) {
   return (
-    <button className={danger ? "icon bad" : "icon"} title={label} aria-label={label} onClick={onClick}>
+    <button
+      className={danger ? "icon bad" : "icon"}
+      title={label}
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+    >
       {children}
     </button>
   );
@@ -950,6 +958,21 @@ function CopyIcon() {
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
       <rect x="5.2" y="4.2" width="7" height="8.2" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
       <path d="M3.8 10.8V3.5h7" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path
+        d="M3.2 8.6l3.1 3.1 6.5-7.4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -2167,20 +2190,27 @@ function YamlTab({ kubi, secret, ready, yaml }: { kubi: Kubi; secret: boolean; r
   return (
     <div className="yaml-tab">
       {secret ? (
-        <label>
-          <input type="checkbox" checked={reveal} onChange={(event) => kubi.setReveal(event.target.checked)} /> Show secret values
+        <label className="row">
+          <input type="checkbox" checked={reveal} onChange={(event) => kubi.setReveal(event.target.checked)} /> Show
+          secret values
         </label>
       ) : null}
       {!ready || yaml == null ? <p>Loading YAML…</p> : null}
       {ready && yaml != null ? (
         <>
           <div className="row">
-            <button onClick={() => void navigator.clipboard.writeText(draft)}>Copy</button>
-            <button disabled={masked || draft.trim() === ""} onClick={() => kubi.patchYaml(draft)}>
-              Patch
-            </button>
+            <IconButton label="Copy" onClick={() => void navigator.clipboard.writeText(draft)}>
+              <CopyIcon />
+            </IconButton>
+            <IconButton
+              label="Patch"
+              disabled={masked || draft.trim() === ""}
+              onClick={() => kubi.patchYaml(draft)}
+            >
+              <CheckIcon />
+            </IconButton>
+            {masked ? <span className="muted">Show secret values before patching.</span> : null}
           </div>
-          {masked ? <p className="muted">Show secret values before patching.</p> : null}
           {kubi.patchError ? <p className="bad wrap">{kubi.patchError}</p> : null}
           <textarea className="yaml" value={draft} spellCheck={false} onChange={(event) => setDraft(event.target.value)} />
         </>

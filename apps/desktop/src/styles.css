@@ -745,17 +745,35 @@ th.num, td.num {
 
 /* YAML tab: the editor fills the panel and scrolls both ways instead of
    wrapping lines. */
-.yaml-tab .row { display: flex; gap: var(--sp1); margin-top: var(--sp2); }
+.yaml-tab { display: flex; flex-direction: column; height: 100%; }
+.yaml-tab .row { flex: none; display: flex; align-items: center; gap: var(--sp1); margin-top: var(--sp2); }
+/* The actions read as buttons: a field of their own, not bare text. */
+.yaml-tab .row button {
+  width: var(--control);
+  height: var(--control);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--field);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.yaml-tab .row button:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+.yaml-tab .row button:disabled { opacity: 0.5; cursor: default; }
 .yaml-tab textarea.yaml {
-  width: 100%;
-  min-height: 320px;
+  flex: 1;
+  min-height: 120px;
   margin-top: var(--sp2);
   font-family: var(--mono);
   font-size: var(--fs-sm);
   line-height: 1.5;
   white-space: pre;
   overflow: auto;
-  resize: vertical;
 }
 
 .detail-stack { display: flex; flex-direction: column; gap: var(--sp3); }
