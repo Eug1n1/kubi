@@ -763,18 +763,18 @@ function WarningMark({ warning }: { warning: ObjectWarning }) {
   );
 }
 
-/** Settings: a gear, matching the stroke of the other icons. */
+/** Settings: a cog, on the same 16 grid and stroke as the other icons. */
 function GearIcon() {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" strokeWidth="1.3" />
       <path
-        d="M8 1.9v1.6M8 12.5v1.6M2.9 8h1.6M11.5 8h1.6M4.4 4.4l1.1 1.1M10.5 10.5l1.1 1.1M11.6 4.4l-1.1 1.1M5.5 10.5l-1.1 1.1"
+        d="M6.6 1.9h2.8l.4 1.9 1.6-.9 2 2-1 1.6 1.9.5v2.8l-1.9.4 1 1.6-2 2-1.6-1-.4 1.9H6.6l-.4-1.9-1.6 1-2-2 1-1.6-1.9-.4V6.9l1.9-.5-1-1.6 2-2 1.6.9z"
         fill="none"
         stroke="currentColor"
         strokeWidth="1.3"
-        strokeLinecap="round"
+        strokeLinejoin="round"
       />
+      <circle cx="8" cy="8" r="1.9" fill="none" stroke="currentColor" strokeWidth="1.3" />
     </svg>
   );
 }

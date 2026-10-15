@@ -63,6 +63,8 @@ shipped as.
 
 ### Changed
 
+- The Settings button in the topbar is a cog instead of a sun: the old glyph was
+  a ring with eight rays, which reads as brightness rather than settings.
 - The small things that make the window feel finished: menus and modals rise
   into place instead of appearing, buttons that start something give slightly
   under the pointer, counts keep their width while they change, panel prose
