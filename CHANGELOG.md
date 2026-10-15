@@ -47,6 +47,9 @@ The `Unreleased` section holds what is on `main` but not in a release yet; on a
   terminal palette that follows.
 - A visual harness (`make preview`) that renders the real components with fake
   data into pages any headless browser can screenshot.
+- Windows and Linux support: the shell has no platform-specific code, the
+  bundler produces `.msi`/`.exe` on Windows and `.deb`/AppImage on Linux next to
+  the macOS `.dmg`, and CI builds and tests on all three.
 
 ### Changed
 

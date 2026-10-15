@@ -5,7 +5,7 @@ of, follow its logs, open a shell in a container and forward a port — without
 leaving the keyboard.
 
 Kubi is a Tauri app: a Rust core talks to the Kubernetes API and a React front
-end renders what it sends back.
+end renders what it sends back. It runs on macOS, Windows and Linux.
 
 ## Features
 
@@ -48,10 +48,13 @@ end renders what it sends back.
 
 ## Requirements
 
-- macOS for the packaged app (the bundle targets are `app` and `dmg`).
+- macOS 11+, Windows 10+ or a Linux desktop with WebKitGTK 4.1.
 - Rust 1.95.0, pinned in `rust-toolchain.toml`.
-- Node 20 or newer (CI uses 22) and the Tauri prerequisites for macOS (Xcode
-  Command Line Tools).
+- Node 20 or newer (CI uses 22).
+- Build prerequisites: the Xcode Command Line Tools on macOS; on Linux
+  `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev` and
+  `patchelf`. Windows needs nothing beyond Rust and Node — WebView2 ships with
+  the system and the bundler fetches its own WiX and NSIS.
 - A kubeconfig: the standard `~/.kube/config` or `$KUBECONFIG` is picked up
   automatically, and another file can be chosen in the app.
 
@@ -61,16 +64,23 @@ end renders what it sends back.
 make install   # npm install
 make dev       # Vite dev server plus Tauri, with hot reload
 make test      # tsc and a production build, then cargo test --workspace
-make dmg       # .app and .dmg into target/release/bundle/
+make bundle    # installers for this platform: dmg, msi/nsis or deb/AppImage
+make dmg       # macOS only: the .app and the .dmg
 make preview   # render the visual harness pages (see below)
 ```
 
-`make` on its own lists every target. `make dmg` asks the bundler for `app,dmg`
-together, because a dmg-only run cleans up an `.app` it never wrote and fails
-after a valid dmg was produced, and it sets `CI=true` so create-dmg skips its
-Finder AppleScript — that step fails on macOS 15+/26 and needs Automation
-permission for the terminal. Only the icon layout of the dmg window is lost;
-`make dmg-styled` builds the styled variant for anyone who has granted it.
+`make` on its own lists every target. Which installers `make bundle` produces
+comes from `tauri.conf.json` and its `tauri.windows.conf.json` /
+`tauri.linux.conf.json` companions — `app` and `dmg` on macOS, `msi` and `nsis`
+on Windows, `deb` and AppImage on Linux — and they land in
+`target/release/bundle/`.
+
+On macOS the `dmg` target also asks for `app,dmg` together, because a dmg-only
+run cleans up an `.app` it never wrote and fails after a valid dmg was produced,
+and it sets `CI=true` so create-dmg skips its Finder AppleScript — that step
+fails on macOS 15+/26 and needs Automation permission for the terminal. Only the
+icon layout of the dmg window is lost; `make dmg-styled` builds the styled
+variant for anyone who has granted it.
 
 ## Layout
 
@@ -92,12 +102,13 @@ UI state is written next to the kubeconfig's neighbours in the app config
 directory, so it survives both dev runs and bundled builds:
 
 ```
-~/Library/Application Support/dev.kubi.desktop/settings.json
-~/Library/Application Support/dev.kubi.desktop/context-groups.json
+macOS    ~/Library/Application Support/dev.kubi.desktop/
+Windows  %APPDATA%\dev.kubi.desktop\
+Linux    ~/.config/dev.kubi.desktop/
 ```
 
-The identifier in `tauri.conf.json` decides that path; changing it moves the
-files.
+with `settings.json` and `context-groups.json` inside. The identifier in
+`tauri.conf.json` decides those paths; changing it moves the files.
 
 ## Visual harness
 
@@ -114,15 +125,16 @@ The generated pages are ignored by git.
 ## Releasing
 
 `.github/workflows/ci.yml` builds the front end and runs the Rust tests on every
-push and pull request. `.github/workflows/release.yml` builds the `.app` and the
-`.dmg` on a tag and opens a draft release with them:
+push and pull request, on macOS, Linux and Windows. `.github/workflows/release.yml`
+builds the installers for all three on a tag and opens one draft release with
+them attached:
 
 ```sh
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-Run it from the Actions tab without a tag to only check that the bundle builds
-and to keep the dmg as a workflow artifact.
+Run it from the Actions tab without a tag to only check that the bundles build
+and to keep the installers as workflow artifacts.
 
 [`CHANGELOG.md`](CHANGELOG.md) holds what shipped; move the `Unreleased` entries
 under the version when tagging.
@@ -136,7 +148,10 @@ under the version when tagging.
   workloads show their spec in the manifest tab.
 - YAML colouring is line based rather than a full YAML parser, so flow
   collections and block scalars are coloured as plain values.
-- Only macOS bundles are configured today.
+- Installers are configured per platform in `tauri.conf.json` and its
+  `tauri.windows.conf.json` / `tauri.linux.conf.json` companions. Windows builds
+  are unsigned, so SmartScreen will warn about them; macOS builds are unsigned
+  too unless the signing keys are provided.
 
 ## License
 

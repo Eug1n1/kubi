@@ -10,7 +10,7 @@ BUNDLE_DMG := target/release/bundle/dmg
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install dev build dmg dmg-styled test preview clean distclean
+.PHONY: help install dev build bundle dmg dmg-styled test preview clean distclean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -38,6 +38,13 @@ dmg: | $(APP_DIR)/node_modules/.bin/tauri ## Build a distributable .dmg (plus th
 dmg-styled: | $(APP_DIR)/node_modules/.bin/tauri ## Build a .dmg with the Finder icon layout (needs Finder Automation permission)
 	cd $(APP_DIR) && npm run tauri -- build --bundles app,dmg
 	@ls -1 $(BUNDLE_DMG)/*.dmg
+
+# One target for every platform: the bundle types come from tauri.conf.json and
+# its tauri.windows.conf.json / tauri.linux.conf.json companions (dmg on macOS,
+# msi and nsis on Windows, deb and AppImage on Linux). `CI=true` only matters for
+# the macOS dmg step (see above) and is ignored elsewhere.
+bundle: | $(APP_DIR)/node_modules/.bin/tauri ## Build the installers for this platform
+	cd $(APP_DIR) && CI=true npm run tauri -- build
 
 $(APP_DIR)/node_modules/.bin/tauri:
 	$(NPM) install

@@ -8,8 +8,12 @@ on:
 
 jobs:
   test:
-    name: Tests and frontend build
-    runs-on: macos-latest
+    name: Tests and frontend build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-22.04, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -20,6 +24,13 @@ jobs:
           cache-dependency-path: apps/desktop/package-lock.json
 
       - uses: Swatinem/rust-cache@v2
+
+      # WebKitGTK and friends are what compiling the shell needs on Linux.
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev
 
       - name: Install JS dependencies
         run: npm ci --prefix apps/desktop
