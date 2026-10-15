@@ -519,6 +519,30 @@ export function eventKey(event: AppEvent): string {
   return Object.keys(event)[0] ?? "";
 }
 
+/**
+ * The cluster an event belongs to, or null when it is no single cluster's
+ * business: the context list and errors are everyone's, and the stream events
+ * are keyed by stream id instead. A context window ignores the clusters that
+ * are not its own.
+ */
+export function eventScope(event: AppEvent): string | null {
+  if ("connected" in event) return event.connected.context;
+  if ("disconnected" in event) return event.disconnected.context;
+  if ("rows" in event) return event.rows.context;
+  if ("customResources" in event) return event.customResources.context;
+  if ("usage" in event) return event.usage.context;
+  if ("metricsUnavailable" in event) return event.metricsUnavailable.context;
+  if ("yaml" in event) return event.yaml.context;
+  if ("objectData" in event) return event.objectData.context;
+  if ("objectEvents" in event) return event.objectEvents.context;
+  if ("warnings" in event) return event.warnings.context;
+  if ("podSources" in event) return event.podSources.context;
+  if ("podContainers" in event) return event.podContainers.context;
+  if ("applyResult" in event) return event.applyResult.context;
+  if ("overview" in event) return event.overview.context;
+  return null;
+}
+
 export function sameView(a: View, b: View): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }

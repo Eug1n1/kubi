@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import type { LogSnapshot } from "./types";
+import { ownerOfLabel } from "./windows";
 
 const LINE_CAP = 4000;
 
@@ -131,6 +132,8 @@ export function LogPane({
 }
 
 export function LogWindow({ label }: { label: string }) {
+  // The window this pane answers to: the one that opened it, from the label.
+  const owner = ownerOfLabel(label);
   const [view, setView] = useState<LogSnapshot | null>(null);
   const [follow, setFollow] = useState(0);
 
@@ -164,7 +167,7 @@ export function LogWindow({ label }: { label: string }) {
         return;
       }
       unlist.push(onSnapshot, onLine);
-      await emitTo("main", "log-ready", { label });
+      await emitTo(owner, "log-ready", { label });
     })();
     return () => {
       stop = true;
@@ -185,19 +188,19 @@ export function LogWindow({ label }: { label: string }) {
         logs={view}
         follow={follow}
         onPod={(pod) => {
-          void emitTo("main", "log-pod", { label, pod });
+          void emitTo(owner, "log-pod", { label, pod });
         }}
         onContainer={(container) => {
-          void emitTo("main", "log-container", { label, container });
+          void emitTo(owner, "log-container", { label, container });
         }}
         onPrevious={(value) => {
-          void emitTo("main", "log-previous", { label, value });
+          void emitTo(owner, "log-previous", { label, value });
         }}
         onTimestamps={(value) => {
-          void emitTo("main", "log-timestamps", { label, value });
+          void emitTo(owner, "log-timestamps", { label, value });
         }}
         onClose={() => {
-          void emitTo("main", "log-close", { label });
+          void emitTo(owner, "log-close", { label });
         }}
       />
     );

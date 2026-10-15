@@ -1,7 +1,7 @@
 {
   "identifier": "default",
   "description": "Kubi window permissions",
-  "windows": ["main", "log-*", "exec-*"],
+  "windows": ["main", "log-*", "exec-*", "ctx-*"],
   "permissions": [
     "core:default",
     "core:webview:allow-create-webview-window",

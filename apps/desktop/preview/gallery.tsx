@@ -9,7 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ContextMenuBody, ContextRail } from "../src/contexts";
 import { Colors, SettingsModal } from "../src/settings";
 import { LogPane } from "../src/logWindow";
-import { ArgoScreen, Detail, OverviewScreen, ResourceScreen, RowMenu, SearchModal, Sidebar, TopBar } from "../src/screens";
+import { ArgoScreen, Detail, OverviewScreen, PinnedSplash, ResourceScreen, RowMenu, SearchModal, Sidebar, TopBar } from "../src/screens";
 import { DEFAULT_KEYMAP } from "../src/keymap";
 import { DEFAULT_THEME, BUILTIN_THEMES, themeTokens } from "../src/theme";
 import type { Kubi } from "../src/useKubi";
@@ -155,6 +155,13 @@ function kubiFor(activeTab: Tab): Kubi {
     ctxMenu: null,
     connectedContexts: ["kz-mgmt", "kz-dev"],
     clusterColors: {},
+    contextWindows: [],
+    pinned: null,
+    pinnedGone: false,
+    pinnedMissing: false,
+    openContextWindow: noop,
+    connectContext: noop,
+    closeWindow: noop,
     searchOpen: false,
     settingsOpen: false,
     keymap: DEFAULT_KEYMAP,
@@ -322,6 +329,16 @@ const pages: [string, string, string?][] = [
   ["Argo screen", renderToStaticMarkup(<ArgoScreen kubi={argoKubi()} />)],
   ["Spotlight", renderToStaticMarkup(<SearchModal kubi={kubiFor(tab("overview", null))} />)],
   ["Menus — context and row", menus()],
+  [
+    "Context window — marked rail and splash",
+    `<div class="pv-side">${renderToStaticMarkup(
+      <ContextRail kubi={{ ...kubiFor(tab("overview", null)), contextWindows: ["kz-mgmt"] } as Kubi} />,
+    )}${renderToStaticMarkup(
+      <PinnedSplash kubi={{ ...kubiFor(tab("overview", null)), pinned: "prod-eu", pinnedGone: true } as Kubi} />,
+    )}${renderToStaticMarkup(
+      <PinnedSplash kubi={{ ...kubiFor(tab("overview", null)), pinned: "kz-dev", pinnedGone: false } as Kubi} />,
+    )}</div>`,
+  ],
   ["Sidebar — groups closed at start", freshSidebar()],
   ["Settings", renderToStaticMarkup(<SettingsModal kubi={kubiFor(tab("overview", null))} />)],
   [

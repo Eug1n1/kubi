@@ -1,22 +1,14 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { App } from "./App";
 import { ExecWindow } from "./execWindow";
 import { LogWindow } from "./logWindow";
+import { currentWindowLabel, pinnedContext } from "./windows";
 import "./styles.css";
-
-function windowLabel(): string {
-  try {
-    return getCurrentWindow().label;
-  } catch {
-    return "main";
-  }
-}
 
 const root = document.getElementById("root");
 if (root) {
-  const label = windowLabel();
+  const label = currentWindowLabel();
   if (label.startsWith("log-")) {
     createRoot(root).render(<LogWindow label={label} />);
   } else if (label.startsWith("exec-")) {
@@ -24,7 +16,9 @@ if (root) {
   } else {
     createRoot(root).render(
       <StrictMode>
-        <App />
+        {/* A ctx-* label is a context window: the App renders one cluster, the
+            name of which came with the URL. */}
+        <App pinned={label.startsWith("ctx-") ? pinnedContext() : null} />
       </StrictMode>,
     );
   }

@@ -449,6 +449,30 @@ export function ContextRail({ kubi }: { kubi: Kubi }) {
         {openTabs.has(item.name) ? (
           <span className="ctx-open" title="Open in this window" aria-label="Open in this window" />
         ) : null}
+        {kubi.contextWindows.includes(item.name) ? (
+          <span
+            className="ctx-win"
+            role="button"
+            tabIndex={0}
+            title="This cluster has its own window"
+            aria-label={`Focus the window of ${item.name}`}
+            // The badge sits inside the row's button: a press on it must not
+            // drag or open the row, only focus the window it points to.
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              void kubi.openContextWindow(item.name);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.stopPropagation();
+                void kubi.openContextWindow(item.name);
+              }
+            }}
+          >
+            <WindowIcon />
+          </span>
+        ) : null}
         <span className="muted">{item.cluster}</span>
       </button>
     );
@@ -652,6 +676,15 @@ export function ContextMenuBody({ kubi, name }: { kubi: Kubi; name: string }) {
         {live ? <span className="muted">connected</span> : null}
       </div>
       <button
+        title="A window of its own for this cluster"
+        onClick={() => {
+          kubi.closeContextMenu();
+          void kubi.openContextWindow(name);
+        }}
+      >
+        <WindowIcon /> Open separately
+      </button>
+      <button
         disabled={!live}
         title={live ? "Drop this cluster and close its tabs" : "Not connected in this window"}
         onClick={() => kubi.disconnectContext(name)}
@@ -728,6 +761,16 @@ function PowerIcon() {
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
       <path d="M8 2.4v5.4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
       <path d="M4.5 4.5a5 5 0 1 0 7 0" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** A window of one's own: the outline with a title bar. */
+function WindowIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <rect x="2.4" y="2.8" width="11.2" height="10.4" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M2.4 5.8h11.2" fill="none" stroke="currentColor" strokeWidth="1.3" />
     </svg>
   );
 }

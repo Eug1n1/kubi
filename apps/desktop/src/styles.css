@@ -596,6 +596,54 @@ p,
   border-radius: 50%;
   background: var(--accent);
 }
+/* The badge for a context that also lives in a window of its own: click it to
+   focus that window. A span on purpose — a real button inside the row's button
+   would light up under the row's hover and read as a patch of another object
+   riding on the row. */
+.ctx-win {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 2px;
+  color: var(--dim);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.ctx-win:hover { color: var(--fg); background: var(--selected); }
+.ctx-win:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* ------------------------------------------------- context window splash */
+/* The one screen a context window shows when there is nothing to browse. */
+.pinned-splash {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pinned-splash .splash-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp2);
+  max-width: 360px;
+  padding: var(--sp5);
+  text-align: center;
+}
+.pinned-splash .strip {
+  width: 4px;
+  height: 26px;
+  border-radius: 2px;
+}
+.pinned-splash h2 {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.pinned-splash p { margin: 0; }
+.pinned-splash .splash-row { display: flex; gap: var(--sp2); }
 .tab-ghost {
   position: fixed;
   z-index: 80;

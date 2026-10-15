@@ -51,6 +51,8 @@ apps/desktop/src/
   columns.ts     the table columns per kind
   format.ts      number and age formatting, and `clusterColor`
   api.ts         the five `invoke` calls: send_command and the two config files
+  windows.ts     window labels as addresses: who a dock window answers to,
+                 what a ctx-* window is pinned to
   theme.ts       one base color -> every CSS token
   prefs.ts       what `settings.json` holds (keymap, theme, context colors)
   keymap.ts      rebindable shortcuts and their defaults
@@ -83,8 +85,12 @@ Adding a command or an event touches four places: `model.rs` (plus a line in its
 protocol is mirrored by hand, so keep the names identical.
 
 Detached log and exec windows talk over their own channels (`log-ready`,
-`log-dock`, `log-close`, `log-pod`, …) with `emitTo`, and each window decides
-what to render from its window label (`main`, `log-*`, `exec-*`).
+`log-dock`, `log-close`, `log-pod`, …) with `emitTo`, addressed to the window
+that opened them — `log-3:ctx-prod` answers to that context window, a plain
+`log-3` to the main one. Each window decides what to render from its window
+label (`main`, `ctx-*`, `log-*`, `exec-*`); a `ctx-*` label is a context
+window, a main-like window pinned to one context whose exact name rides in
+its URL query.
 
 ## Invariants worth not breaking
 
@@ -102,6 +108,15 @@ watches, logs, forwards or execs — that is the whole point of the feature. Liv
 streams are keyed by id *and* remember their context (`LiveStream`, `ExecSlot`)
 so `Disconnect` stops only its own. When you add a stream, record the context
 with it, or the teardown will be wrong.
+
+**A context window is a main-like window pinned to one context.** It renders
+the same `App` with a `pinned` prop, filters broadcast events to its own
+cluster (`eventScope` in `types.ts`), and opens its own dock windows, which
+answer to it by label. Stream ids are drawn from a per-window random base
+(`streamIdBase` in `useKubi.ts`) because the engine keys streams by id alone —
+two windows counting from 1 would collide. Opening a context window connects
+its cluster; a repeat connect is safe (the engine restarts the catalog), and
+closing the window leaves the cluster connected.
 
 **Each `AppEvent` is a one-key object.** `eventKey()` reads
 `Object.keys(event)[0]`, and the enum is serde `camelCase` with

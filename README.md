@@ -19,6 +19,12 @@ end renders what it sends back. It runs on macOS, Windows and Linux.
 - Spotlight search over every resource and namespace (`Ctrl`/`Cmd` + `A` by
   default, rebindable) and a namespace picker with autocomplete.
 - A rail of kubeconfig contexts, grouped into folders.
+- Any context in a window of its own: `Open separately` in its right-click
+  menu opens a window pinned to that cluster, which keeps working while the
+  main window browses others and keeps its connection when the window closes.
+  The rail marks the contexts that have their own window, and clicking the
+  mark focuses it. Logs and shells opened in a context window belong to that
+  window.
 
 **Inspect**
 

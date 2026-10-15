@@ -289,6 +289,36 @@ export function TopBar({ kubi }: { kubi: Kubi }) {
   );
 }
 
+/**
+ * The screen a context window shows when there is no cluster to browse: its
+ * context left the kubeconfig, or the cluster is not connected. The window
+ * stays put either way — nothing yanks it out from under the reader.
+ */
+export function PinnedSplash({ kubi }: { kubi: Kubi }) {
+  const name = kubi.pinned;
+  if (name == null) return null;
+  return (
+    <main className="main pinned-splash">
+      <div className="splash-card">
+        <i className="strip" style={{ background: clusterColor(name) }} />
+        <h2>{name}</h2>
+        <p className="muted">
+          {kubi.pinnedGone ? "This context is no longer in the kubeconfig." : "This cluster is not connected."}
+        </p>
+        <div className="splash-row">
+          {kubi.pinnedGone ? (
+            <button onClick={kubi.closeWindow}>Close window</button>
+          ) : (
+            <button className="create" onClick={() => kubi.connectContext(name)}>
+              Connect
+            </button>
+          )}
+        </div>
+      </div>
+    </main>
+  );
+}
+
 export function Sidebar({ kubi }: { kubi: Kubi }) {
   const gateway = installedGateway(kubi.customResources);
   const groups = crGroups(kubi.customResources);

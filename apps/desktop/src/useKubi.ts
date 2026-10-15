@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { emitTo, listen } from "@tauri-apps/api/event";
+import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { cursorPosition, getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readSettingsFile, readThemesFile, send, writeSettingsFile, writeThemesFile } from "./api";
+import { currentWindowLabel, ownerSuffix } from "./windows";
 import { setClusterColors } from "./format";
 import {
   DEFAULT_KEYMAP,
@@ -49,7 +50,7 @@ import type {
   View,
   WatchTarget,
 } from "./types";
-import { eventKey, sameTarget, sameView, watchOf } from "./types";
+import { eventKey, eventScope, sameTarget, sameView, watchOf } from "./types";
 import { canExec, canForward, canLogs, canRestart, logTitle, podSettled, viewTitle } from "./catalog";
 
 type HistPoint = { t: number; cpu: number; mem: number };
@@ -155,7 +156,16 @@ function applyUsage(rows: ResourceRow[], context: string, usage: Record<string, 
   });
 }
 
-export function useKubi() {
+/**
+ * Stream ids must be unique across every window of the process: the engine
+ * keys a live stream by id alone. Each window draws a random base and counts
+ * up from it, so no two windows ever hand the engine the same id.
+ */
+function streamIdBase(): number {
+  return Math.floor(Math.random() * 2 ** 24) * 0x10000;
+}
+
+export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
   const session = useRef<Session>({
     context: null,
     active: null,
@@ -212,7 +222,7 @@ export function useKubi() {
   const [activeDock, setActiveDockState] = useState<string | null>(null);
   const dockRef = useRef<DockTab[]>([]);
   const activeDockRef = useRef<string | null>(null);
-  const logSeq = useRef(0);
+  const logSeq = useRef(streamIdBase());
   const readyWindows = useRef(new Set<string>());
   const closingLabels = useRef(new Set<string>());
   const execWrites = useRef(new Map<string, (text: string) => void>());
@@ -245,13 +255,22 @@ export function useKubi() {
   const [colors, setColors] = useState<Record<string, string>>({});
   /** Contexts this window holds a connection to, so the menu can say so. */
   const [connected, setConnected] = useState<string[]>([]);
+  /** The label of this window: the dock windows opened here answer to it. */
+  const [ownLabel] = useState(currentWindowLabel);
+  /** Contexts with a window of their own, so the rail can mark them. */
+  const [contextWindows, setContextWindows] = useState<string[]>([]);
+  const ctxWindowNames = useRef(new Map<string, string>());
+  /** True in a context window whose context left the kubeconfig. */
+  const [pinnedGone, setPinnedGone] = useState(false);
   const [forwards, setForwards] = useState<PortForward[]>([]);
   const [forwardDraft, setForwardDraft] = useState<ForwardDraft | null>(null);
   const [patchError, setPatchError] = useState<string | null>(null);
   const forwardsRef = useRef<PortForward[]>([]);
-  const forwardSeq = useRef(0);
-  const execSeq = useRef(0);
+  const forwardSeq = useRef(streamIdBase());
+  const execSeq = useRef(streamIdBase());
   const applyKind = useRef<"create" | "patch">("create");
+  /** The cluster the running apply works in, so another window's apply does not close this window's modal. */
+  const applyContext = useRef("");
 
   function setDock(next: DockTab[]) {
     dockRef.current = next;
@@ -276,6 +295,10 @@ export function useKubi() {
     const text = message.trim();
     if (!text) return;
     setErrors((current) => (current[0] === text ? current : [text, ...current].slice(0, 4)));
+  }
+
+  function syncContextWindows() {
+    setContextWindows([...ctxWindowNames.current.values()]);
   }
 
   function clearErrors() {
@@ -419,7 +442,7 @@ export function useKubi() {
     return {
       pane: "log",
       id,
-      label: prior?.label ?? `log-${id}`,
+      label: prior?.label ?? `log-${id}${ownerSuffix(ownLabel)}`,
       detached: prior?.detached ?? false,
       kind,
       namespace,
@@ -459,7 +482,7 @@ export function useKubi() {
   function openResourceLogs(kind: ResourceKind, namespace: string, name: string) {
     const existing = dockRef.current.find((tab) => sameLog(tab, kind, namespace, name));
     if (existing && !existing.closed) {
-      if (existing.detached) void focusDockWindow(existing.label);
+      if (existing.detached) void focusWindow(existing.label);
       else setActiveDock(existing.label);
       return;
     }
@@ -470,7 +493,7 @@ export function useKubi() {
         : [...dockRef.current, tab],
     );
     if (tab.detached) {
-      void focusDockWindow(tab.label);
+      void focusWindow(tab.label);
       publishLog(tab);
     } else {
       setActiveDock(tab.label);
@@ -491,7 +514,7 @@ export function useKubi() {
     return {
       pane: "exec",
       id,
-      label: previous?.label ?? `exec-${id}`,
+      label: previous?.label ?? `exec-${id}${ownerSuffix(ownLabel)}`,
       detached: previous?.detached ?? false,
       namespace,
       name,
@@ -505,7 +528,7 @@ export function useKubi() {
   function openPodExec(namespace: string, name: string) {
     const existing = dockRef.current.find((tab) => sameExec(tab, namespace, name));
     if (existing && !existing.closed) {
-      if (existing.detached) void focusDockWindow(existing.label);
+      if (existing.detached) void focusWindow(existing.label);
       else setActiveDock(existing.label);
       return;
     }
@@ -516,7 +539,7 @@ export function useKubi() {
         : [...dockRef.current, tab],
     );
     if (tab.detached) {
-      void focusDockWindow(tab.label);
+      void focusWindow(tab.label);
       publishExec(tab);
     } else {
       setActiveDock(tab.label);
@@ -552,10 +575,72 @@ export function useKubi() {
     if (activeDockRef.current === tab.label) setActiveDock(dockedTail(next));
   }
 
-  function focusDockWindow(label: string) {
+  function focusWindow(label: string) {
     void WebviewWindow.getByLabel(label)
       .then((win) => win?.setFocus())
       .catch(() => undefined);
+  }
+
+  /** A label cannot hold every character a context name can; the slug is only an address. */
+  function contextWindowLabel(name: string): string {
+    const slug = name
+      .toLowerCase()
+      .replace(/[^a-z0-9-_]+/g, "-")
+      .replace(/(^-|-$)/g, "");
+    return `ctx-${slug === "" ? "window" : slug}`;
+  }
+
+  /**
+   * Opens a context in a window of its own, or focuses the window it already
+   * has: one context window per context. Opening connects the cluster if
+   * nothing else already did; the connection stays when this window closes.
+   */
+  async function openContextWindow(name: string) {
+    const mine = [...ctxWindowNames.current.entries()].find(([, context]) => context === name);
+    if (mine) {
+      focusWindow(mine[0]);
+      return;
+    }
+    const base = contextWindowLabel(name);
+    let label = base;
+    // A different context with the same slug steps aside: two windows under
+    // one label would be one window.
+    for (let n = 2; ctxWindowNames.current.has(label); n += 1) label = `${base}-${n}`;
+    const existing = await WebviewWindow.getByLabel(label).catch(() => null);
+    if (existing) {
+      // A leftover this window lost track of (a dev reload): focus it rather
+      // than fail under its label.
+      await existing.setFocus().catch(() => undefined);
+      return;
+    }
+    const { x, y } = await cursorWindowPosition();
+    const created = new WebviewWindow(label, {
+      title: `Kubi — ${name}`,
+      // The exact name rides in the URL, where every character a label cannot
+      // hold survives untouched.
+      url: `index.html?context=${encodeURIComponent(name)}`,
+      width: 1280,
+      height: 800,
+      minWidth: 900,
+      minHeight: 560,
+      resizable: true,
+      focus: true,
+      preventOverflow: true,
+      x,
+      y,
+    });
+    void created.once("tauri://error", (event) => {
+      ctxWindowNames.current.delete(label);
+      syncContextWindows();
+      const detail = event.payload;
+      pushError(typeof detail === "string" && detail.trim() !== "" ? detail : "Could not open the window");
+    }).catch(() => undefined);
+    void created.once("tauri://destroyed", () => {
+      ctxWindowNames.current.delete(label);
+      syncContextWindows();
+    }).catch(() => undefined);
+    ctxWindowNames.current.set(label, name);
+    syncContextWindows();
   }
 
   function dockTitle(tab: DockTab): string {
@@ -563,15 +648,8 @@ export function useKubi() {
     return tab.namespace ? `Exec ${tab.namespace}/${tab.name}` : `Exec ${tab.name}`;
   }
 
-  async function openDockWindow(tab: DockTab, size: { width: number; height: number }) {
-    const existing = await WebviewWindow.getByLabel(tab.label).catch(() => null);
-    if (existing) {
-      await existing.setFocus().catch(() => undefined);
-      const current = findDock(tab.label);
-      if (current?.pane === "log") publishLog(current);
-      if (current?.pane === "exec") publishExec(current);
-      return;
-    }
+  /** A new window opens at the pointer, so it lands where the click was. */
+  async function cursorWindowPosition(): Promise<{ x: number; y: number }> {
     let x = 96;
     let y = 96;
     try {
@@ -583,6 +661,19 @@ export function useKubi() {
     } catch {
       // Keep the fallback near the top-left of the screen.
     }
+    return { x, y };
+  }
+
+  async function openDockWindow(tab: DockTab, size: { width: number; height: number }) {
+    const existing = await WebviewWindow.getByLabel(tab.label).catch(() => null);
+    if (existing) {
+      await existing.setFocus().catch(() => undefined);
+      const current = findDock(tab.label);
+      if (current?.pane === "log") publishLog(current);
+      if (current?.pane === "exec") publishExec(current);
+      return;
+    }
+    const { x, y } = await cursorWindowPosition();
     const created = new WebviewWindow(tab.label, {
       title: dockTitle(tab),
       width: Math.max(360, Math.round(size.width)),
@@ -1042,6 +1133,13 @@ export function useKubi() {
 
   const handleRef = useRef<(event: AppEvent) => void>(() => {});
   handleRef.current = (event) => {
+    // A context window shares the broadcast with every window of the process;
+    // only its own cluster is its business. The stream events are keyed by
+    // stream id, which is unique per window, so they guard themselves.
+    if (pinned != null) {
+      const scope = eventScope(event);
+      if (scope != null && scope !== pinned) return;
+    }
     const key = eventKey(event);
     if (key === "contexts" && "contexts" in event) {
       setLoadingConfig(false);
@@ -1053,6 +1151,24 @@ export function useKubi() {
       if (event.contexts.length === 0) {
         setConnecting(false);
         setCustomResources({});
+        setPinnedGone(pinned != null);
+        return;
+      }
+      if (pinned != null) {
+        // A context window browses its own cluster and nothing else. Opening it
+        // connects that cluster if nothing else already did; a repeat connect
+        // is safe, the engine restarts the catalog and streams keep their ids.
+        const still = event.contexts.some((item) => item.name === pinned);
+        setPinnedGone(!still);
+        if (!still) return;
+        if (session.current.context !== pinned) {
+          session.current.context = null;
+          switchContext(pinned);
+        } else if (!connected.includes(pinned)) {
+          // Back after a disconnect or a kubeconfig round-trip.
+          setConnecting(true);
+          void send({ connect: { context: pinned } });
+        }
         return;
       }
       const current = session.current.context;
@@ -1088,6 +1204,11 @@ export function useKubi() {
       setCtxMenu(null);
       dropTabsOf(gone);
       if (session.current.context === gone) {
+        if (pinned != null) {
+          // A context window does not drift to another cluster: its splash
+          // offers to connect this one again.
+          return;
+        }
         // The window follows the tab left in front, or another context entirely.
         const front = session.current.active == null ? null : session.current.tabs[session.current.active];
         const next =
@@ -1229,12 +1350,18 @@ export function useKubi() {
       return;
     }
     if (key === "warnings" && "warnings" in event) {
+      // Another window refreshes the warnings of the cluster it browses; the
+      // markers here belong to the cluster in front.
+      if (event.warnings.context !== session.current.context) return;
       const byUid: Record<string, ObjectWarning> = {};
       for (const item of event.warnings.objects) byUid[item.uid] = item;
       setWarnings({ scope: `${event.warnings.context}|${event.warnings.namespace ?? ""}`, byUid });
       return;
     }
     if (key === "applyResult" && "applyResult" in event) {
+      // Another window of the process may have applied in another cluster; a
+      // busy modal here must not close for someone else's apply.
+      if (applyContext.current !== event.applyResult.context) return;
       setCreateBusy(false);
       if (applyKind.current === "patch") {
         setPatchError(event.applyResult.error);
@@ -1414,56 +1541,58 @@ export function useKubi() {
     let stop = false;
     const unlist: Array<() => void> = [];
     void (async () => {
+      // The dock windows this window opens answer to it, not to "main": the
+      // owner rides in their labels.
       const fns = await Promise.all([
         listen<{ label: string }>("log-ready", (event) => dockActions.current.ready(event.payload.label), {
-          target: "main",
+          target: ownLabel,
         }),
         listen<{ label: string }>("log-dock", (event) => dockActions.current.dock(event.payload.label), {
-          target: "main",
+          target: ownLabel,
         }),
         listen<{ label: string }>("log-close", (event) => dockActions.current.close(event.payload.label), {
-          target: "main",
+          target: ownLabel,
         }),
         listen<{ label: string; pod: string }>(
           "log-pod",
           (event) => dockActions.current.pod(event.payload.label, event.payload.pod),
-          { target: "main" },
+          { target: ownLabel },
         ),
         listen<{ label: string; container: string }>(
           "log-container",
           (event) => dockActions.current.container(event.payload.label, event.payload.container),
-          { target: "main" },
+          { target: ownLabel },
         ),
         listen<{ label: string; value: boolean }>(
           "log-previous",
           (event) => dockActions.current.previous(event.payload.label, event.payload.value),
-          { target: "main" },
+          { target: ownLabel },
         ),
         listen<{ label: string; value: boolean }>(
           "log-timestamps",
           (event) => dockActions.current.timestamps(event.payload.label, event.payload.value),
-          { target: "main" },
+          { target: ownLabel },
         ),
         listen<{ label: string }>("exec-ready", (event) => dockActions.current.ready(event.payload.label), {
-          target: "main",
+          target: ownLabel,
         }),
         listen<{ label: string }>("exec-close", (event) => dockActions.current.close(event.payload.label), {
-          target: "main",
+          target: ownLabel,
         }),
         listen<{ label: string; data: string }>(
           "exec-input",
           (event) => dockActions.current.input(event.payload.label, event.payload.data),
-          { target: "main" },
+          { target: ownLabel },
         ),
         listen<{ label: string; cols: number; rows: number }>(
           "exec-resize",
           (event) => dockActions.current.resize(event.payload.label, event.payload.cols, event.payload.rows),
-          { target: "main" },
+          { target: ownLabel },
         ),
         listen<{ label: string; container: string }>(
           "exec-container",
           (event) => dockActions.current.execContainer(event.payload.label, event.payload.container),
-          { target: "main" },
+          { target: ownLabel },
         ),
       ]);
       if (stop) {
@@ -1478,6 +1607,41 @@ export function useKubi() {
     };
   }, []);
 
+  // A context window says who it is, so the rail can mark it and the menu can
+  // focus it instead of opening a second window for the same cluster.
+  useEffect(() => {
+    if (pinned == null) return;
+    void emit("ctx-window", { label: ownLabel, context: pinned }).catch(() => undefined);
+  }, [pinned, ownLabel]);
+
+  // The rail marks the contexts with a window of their own. Windows announce
+  // themselves; a window that closed without this one hearing it is pruned by
+  // asking the shell which labels still exist.
+  useEffect(() => {
+    if (pinned != null) return;
+    let stop = false;
+    void WebviewWindow.getAll()
+      .then((all) => {
+        if (stop) return;
+        const labels = new Set(all.map((win) => win.label));
+        for (const label of [...ctxWindowNames.current.keys()]) {
+          if (!labels.has(label)) ctxWindowNames.current.delete(label);
+        }
+        syncContextWindows();
+      })
+      .catch(() => undefined);
+    const unlisten = listen<{ label: string; context: string }>("ctx-window", (event) => {
+      const { label, context } = event.payload;
+      if (!label.startsWith("ctx-")) return;
+      ctxWindowNames.current.set(label, context);
+      syncContextWindows();
+    });
+    return () => {
+      stop = true;
+      void unlisten.then((fn) => fn());
+    };
+  }, [pinned]);
+
   useEffect(() => {
     if (active != null || !context) return;
     const id = window.setInterval(() => {
@@ -1486,27 +1650,35 @@ export function useKubi() {
     return () => window.clearInterval(id);
   }, [active, context]);
 
+  // The settings load once and again whenever another window of this process
+  // saves them: every window applies the same files, so nothing changes under
+  // one window's back.
   useEffect(() => {
     let stop = false;
-    void Promise.all([readSettingsFile(), readThemesFile()])
-      .then(([settings, stored]) => {
-        if (stop) return;
-        const prefs = parsePrefs(settings);
-        setKeymap(prefs.keymap);
-        setTheme(prefs.theme);
-        setActiveTheme(prefs.themeName);
-        setColors(prefs.colors);
-        // Every strip and badge reads the color through this map, so it has to
-        // be in place before the first render that shows one.
-        setClusterColors(prefs.colors);
-        // Shipped themes come from code; the file holds only custom ones.
-        setThemes([...BUILTIN_THEMES, ...parseThemes(stored)]);
-      })
-      .catch(() => {
-        if (!stop) pushError("Settings could not be read");
-      });
+    function applyStored() {
+      void Promise.all([readSettingsFile(), readThemesFile()])
+        .then(([settings, stored]) => {
+          if (stop) return;
+          const prefs = parsePrefs(settings);
+          setKeymap(prefs.keymap);
+          setTheme(prefs.theme);
+          setActiveTheme(prefs.themeName);
+          setColors(prefs.colors);
+          // Every strip and badge reads the color through this map, so it has to
+          // be in place before the first render that shows one.
+          setClusterColors(prefs.colors);
+          // Shipped themes come from code; the file holds only custom ones.
+          setThemes([...BUILTIN_THEMES, ...parseThemes(stored)]);
+        })
+        .catch(() => {
+          if (!stop) pushError("Settings could not be read");
+        });
+    }
+    const unlisten = listen("prefs-saved", applyStored);
+    applyStored();
     return () => {
       stop = true;
+      void unlisten.then((fn) => fn());
     };
   }, []);
 
@@ -1528,13 +1700,23 @@ export function useKubi() {
         themeName: nextThemeName,
         colors: nextColors,
       }),
-    ).catch(() => pushError("Settings could not be saved"));
+    )
+      .then(() => {
+        // The other windows of this process hold their own copy of the
+        // settings; they re-read the file when it changes under them.
+        void emit("prefs-saved").catch(() => undefined);
+      })
+      .catch(() => pushError("Settings could not be saved"));
   }
 
   /** Writes the custom themes; the shipped ones never go into the file. */
   function persistThemes(next: NamedTheme[]) {
     setThemes(next);
-    void writeThemesFile(serializeThemes(next)).catch(() => pushError("Themes could not be saved"));
+    void writeThemesFile(serializeThemes(next))
+      .then(() => {
+        void emit("prefs-saved").catch(() => undefined);
+      })
+      .catch(() => pushError("Themes could not be saved"));
   }
 
   /** Applies a change immediately, keeping the running state even if the write fails. */
@@ -1764,6 +1946,27 @@ export function useKubi() {
       setCtxMenu(null);
       void send({ disconnect: { context: name } });
     },
+    /** The context this window is pinned to, or null in the main window. */
+    pinned,
+    /** True in a context window with nothing to browse: its context left the kubeconfig, or it is not connected. */
+    pinnedMissing:
+      pinned != null &&
+      (pinnedGone || (!loadingConfig && !connecting && !connected.includes(pinned))),
+    /** True in a context window whose context left the kubeconfig. */
+    pinnedGone,
+    /** Contexts with a window of their own open. */
+    contextWindows,
+    /** Opens a context in its own window, or focuses the window it already has. */
+    openContextWindow,
+    /** Connects one context outright: a context window's splash has no rail to click. */
+    connectContext: (name: string) => {
+      setConnecting(true);
+      void send({ connect: { context: name } });
+    },
+    /** Closes this window: the splash of a context that left the kubeconfig. */
+    closeWindow: () => {
+      void getCurrentWindow().close().catch(() => undefined);
+    },
     /** Picks a color for a context, or `null` to go back to the hue of its name. */
     setClusterColor: (name: string, color: string | null) => {
       const next = { ...colors };
@@ -1852,6 +2055,7 @@ export function useKubi() {
       const index = session.current.active;
       const tab = index == null ? undefined : session.current.tabs[index];
       applyKind.current = "create";
+      applyContext.current = tab?.context ?? "";
       setCreateBusy(true);
       setCreateError(null);
       void send({ apply: { context: tab?.context ?? "", yaml: createYaml, namespace: tab?.namespace ?? null } });
@@ -1861,6 +2065,7 @@ export function useKubi() {
       const index = session.current.active;
       const tab = index == null ? undefined : session.current.tabs[index];
       applyKind.current = "patch";
+      applyContext.current = tab?.context ?? "";
       setPatchError(null);
       void send({ apply: { context: tab?.context ?? "", yaml, namespace: tab?.namespace ?? null } });
     },

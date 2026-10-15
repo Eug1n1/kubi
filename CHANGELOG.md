@@ -13,6 +13,15 @@ shipped as.
 
 ### Added
 
+- A cluster in a window of its own: `Open separately` in a context's
+  right-click menu opens a window pinned to that one cluster, which keeps
+  working while the main window browses others and keeps its connection when
+  the window closes. The rail marks the contexts that have their own window,
+  clicking the mark focuses it, and opening a context again focuses its window
+  instead of a second one. Logs, shells and port forwards opened in a context
+  window belong to it, a window whose context left the kubeconfig says so
+  instead of going away, and theme and color changes now apply to every window
+  of the app at once.
 - Named color themes: Settings → Colors lists the themes the app ships with — the
   current dark look and its light counterpart with the same accent and status
   colors — and switches between them in one click. Choosing a theme applies all

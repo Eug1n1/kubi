@@ -10,6 +10,7 @@ import {
   Detail,
   ForwardBar,
   ForwardDialog,
+  PinnedSplash,
   SessionDrawer,
   OverviewScreen,
   ResourceScreen,
@@ -18,26 +19,34 @@ import {
   TopBar,
 } from "./screens";
 
-export function App() {
-  const kubi = useKubi();
+export function App({ pinned = null }: { pinned?: string | null }) {
+  const kubi = useKubi({ pinned });
   const [detailWidth, setDetailWidth] = useState(440);
   const [logHeight, setLogHeight] = useState(240);
   const argo = kubi.active == null && kubi.home === "argo" && argoInstalled(kubi.customResources);
   return (
     <div className="app">
       <TopBar kubi={kubi} />
-      <ContextRail kubi={kubi} />
-      <Sidebar kubi={kubi} />
-      <main className="main">
-        <div className="workspace">
-          {kubi.active != null ? <ResourceScreen kubi={kubi} /> : argo ? <ArgoScreen kubi={kubi} /> : <OverviewScreen kubi={kubi} />}
-          {kubi.activeTab?.selected ? <Detail kubi={kubi} width={detailWidth} onWidth={setDetailWidth} /> : null}
-        </div>
-        <ForwardBar kubi={kubi} />
-        {kubi.dockTabs.some((tab) => !tab.detached) ? (
-          <SessionDrawer kubi={kubi} height={logHeight} onHeight={setLogHeight} />
-        ) : null}
-      </main>
+      {/* A context window is pinned to one cluster: there is no rail, the
+          window title and the topbar chip say which cluster it is. */}
+      {pinned == null ? <ContextRail kubi={kubi} /> : null}
+      {kubi.pinnedMissing ? (
+        <PinnedSplash kubi={kubi} />
+      ) : (
+        <>
+          <Sidebar kubi={kubi} />
+          <main className="main">
+            <div className="workspace">
+              {kubi.active != null ? <ResourceScreen kubi={kubi} /> : argo ? <ArgoScreen kubi={kubi} /> : <OverviewScreen kubi={kubi} />}
+              {kubi.activeTab?.selected ? <Detail kubi={kubi} width={detailWidth} onWidth={setDetailWidth} /> : null}
+            </div>
+            <ForwardBar kubi={kubi} />
+            {kubi.dockTabs.some((tab) => !tab.detached) ? (
+              <SessionDrawer kubi={kubi} height={logHeight} onHeight={setLogHeight} />
+            ) : null}
+          </main>
+        </>
+      )}
       {kubi.forwardDraft ? <ForwardDialog kubi={kubi} /> : null}
       {kubi.searchOpen ? <SearchModal kubi={kubi} /> : null}
       {kubi.createOpen ? <CreateModal kubi={kubi} /> : null}

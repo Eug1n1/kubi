@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import type { ExecSnapshot } from "./types";
+import { ownerOfLabel } from "./windows";
 
 const TEXT_CAP = 200_000;
 
@@ -129,6 +130,8 @@ export function ExecPane({
 }
 
 export function ExecWindow({ label }: { label: string }) {
+  // The window this pane answers to: the one that opened it, from the label.
+  const owner = ownerOfLabel(label);
   const [view, setView] = useState<ExecSnapshot | null>(null);
   const text = useRef("");
   const write = useRef<((chunk: string) => void) | null>(null);
@@ -166,7 +169,7 @@ export function ExecWindow({ label }: { label: string }) {
         return;
       }
       unlist.push(onSnapshot, onData);
-      await emitTo("main", "exec-ready", { label });
+      await emitTo(owner, "exec-ready", { label });
     })();
     return () => {
       stop = true;
@@ -186,20 +189,20 @@ export function ExecWindow({ label }: { label: string }) {
       <ExecPane
         session={view}
         onContainer={(container) => {
-          void emitTo("main", "exec-container", { label, container });
+          void emitTo(owner, "exec-container", { label, container });
         }}
         onClose={() => {
-          void emitTo("main", "exec-close", { label });
+          void emitTo(owner, "exec-close", { label });
         }}
         readText={() => text.current}
         bind={(sink) => {
           write.current = sink;
         }}
         onInput={(data) => {
-          void emitTo("main", "exec-input", { label, data });
+          void emitTo(owner, "exec-input", { label, data });
         }}
         onResize={(cols, rows) => {
-          void emitTo("main", "exec-resize", { label, cols, rows });
+          void emitTo(owner, "exec-resize", { label, cols, rows });
         }}
       />
     );
