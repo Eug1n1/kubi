@@ -62,6 +62,10 @@ apps/desktop/src/
   templates.ts   the YAML a new object starts from
 apps/desktop/preview/
   gallery.tsx    the visual harness; contrast.ts checks the palette
+docs/agents/
+  issue-tracker.md, triage-labels.md, domain.md
+                 what the engineering skills read: where issues live, the triage
+                 label vocabulary, and how to use the glossary and ADRs
 ```
 
 ## How a change flows
@@ -280,3 +284,17 @@ A new harness page is a few lines in the `pages` list at the bottom of
 - **The dock panes (logs, exec) are shared across clusters on purpose** — they
   keep running when the window moves to another cluster — and the error banner is
   not yet tagged with the cluster it came from.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live as GitHub issues in `Eug1n1/kubi`, through the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles, each label string equal to its role name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` and `docs/adr/` at the repository root. See `docs/agents/domain.md`.
