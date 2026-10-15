@@ -456,11 +456,11 @@ export function About({ version, status, onCheck, onDownload, onRestart }: About
       <p className="muted">Kubi {version}</p>
       <UpdateStatus status={status} />
       {status.kind === "downloading" ? <UpdateProgress status={status} /> : null}
-      <div className="binding-footer">
+      <p>
         <button className="create" disabled={busy} onClick={onCheck}>
           {status.kind === "checking" ? "Checking…" : "Check for updates"}
         </button>
-      </div>
+      </p>
       {status.kind === "available" ? (
         <p>
           <button className="ghost" onClick={onDownload}>
