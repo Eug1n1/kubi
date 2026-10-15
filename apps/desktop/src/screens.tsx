@@ -489,10 +489,12 @@ export function ResourceScreen({ kubi }: { kubi: Kubi }) {
               onPointerCancel={gesture.cancel}
               onClick={(event) => {
                 if (gesture.click(event)) return;
-                kubi.openView(item.view);
+                kubi.focusTab(index);
               }}
             >
               {viewTitle(item.view)}
+              {/* Which cluster a tab belongs to only matters once there are two. */}
+              {kubi.clustered ? <span className="tab-cluster">{item.context}</span> : null}
             </button>
             <button
               className="x"

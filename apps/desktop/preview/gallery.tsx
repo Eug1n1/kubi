@@ -105,6 +105,7 @@ const tab = (detailTab: Tab["detailTab"], selected: string | null): Tab =>
     events: selected == null ? null : events,
     eventsFor: selected,
     observedAt: Date.now(),
+    context: "kz-mgmt",
   }) as unknown as Tab;
 
 const contexts = [
@@ -122,6 +123,7 @@ function kubiFor(activeTab: Tab): Kubi {
     context: "kz-mgmt",
     namespaces: ["grafana", "kube-system", "argocd", "vm", "cert-manager"],
     tabs: [activeTab],
+    clustered: false,
     active: 0,
     activeTab,
     home: "cluster",

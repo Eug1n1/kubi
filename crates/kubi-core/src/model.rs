@@ -495,30 +495,42 @@ pub enum Command {
         context: String,
     },
     SetNamespace {
+        /// Cluster the namespace belongs to; every command names its own, so one
+        /// window can talk to several clusters at once.
+        context: String,
         namespace: Option<String>,
     },
     Watch {
+        context: String,
         target: WatchTarget,
     },
-    StopWatch,
+    StopWatch {
+        context: String,
+    },
     FetchYaml {
+        context: String,
         target: WatchTarget,
         namespace: String,
         name: String,
         uid: String,
         reveal_secrets: bool,
     },
-    FetchOverview,
+    FetchOverview {
+        context: String,
+    },
     FetchEvents {
+        context: String,
         namespace: String,
         name: String,
         uid: String,
     },
     FetchWarnings {
+        context: String,
         namespace: Option<String>,
     },
     /// Volumes and environment of a pod, with ConfigMap/Secret values resolved.
     FetchPodSources {
+        context: String,
         namespace: String,
         name: String,
         uid: String,
@@ -526,23 +538,29 @@ pub enum Command {
     },
     /// Spec and status of every container of a pod, env values resolved.
     FetchPodContainers {
+        context: String,
         namespace: String,
         name: String,
         uid: String,
         reveal: bool,
     },
-    RefreshCatalog,
+    RefreshCatalog {
+        context: String,
+    },
     Delete {
+        context: String,
         target: WatchTarget,
         namespace: String,
         name: String,
     },
     Restart {
+        context: String,
         kind: ResourceKind,
         namespace: String,
         name: String,
     },
     StartLogs {
+        context: String,
         id: u64,
         kind: ResourceKind,
         namespace: String,
@@ -561,10 +579,12 @@ pub enum Command {
     },
     StopLogs,
     Apply {
+        context: String,
         yaml: String,
         namespace: Option<String>,
     },
     StartPortForward {
+        context: String,
         id: u64,
         namespace: String,
         name: String,
@@ -577,6 +597,7 @@ pub enum Command {
     },
     StopPortForwards,
     StartExec {
+        context: String,
         id: u64,
         namespace: String,
         name: String,
@@ -608,6 +629,7 @@ pub enum AppEvent {
     },
     Error(String),
     Rows {
+        context: String,
         target: WatchTarget,
         rows: Vec<ResourceRow>,
     },
@@ -616,43 +638,55 @@ pub enum AppEvent {
         targets: Vec<CrTarget>,
     },
     Usage {
+        context: String,
         kind: ResourceKind,
         samples: Vec<UsageSample>,
     },
     MetricsUnavailable {
+        context: String,
         kind: ResourceKind,
         message: String,
     },
     Yaml {
+        context: String,
         uid: String,
         yaml: String,
     },
     ObjectData {
+        context: String,
         uid: String,
         entries: Vec<DataEntry>,
     },
     ObjectEvents {
+        context: String,
         uid: String,
         events: Vec<EventInfo>,
     },
     PodSources {
+        context: String,
         uid: String,
         mounts: Vec<PodMount>,
         env: Vec<PodEnv>,
     },
     PodContainers {
+        context: String,
         uid: String,
         containers: Vec<PodContainer>,
     },
     Warnings {
+        context: String,
         /// Namespace the scan covered, `None` for the whole cluster.
         namespace: Option<String>,
         objects: Vec<ObjectWarning>,
     },
     ApplyResult {
+        context: String,
         error: Option<String>,
     },
-    Overview(Box<ClusterOverview>),
+    Overview {
+        context: String,
+        overview: Box<ClusterOverview>,
+    },
     LogStarted {
         id: u64,
         namespace: String,
@@ -702,8 +736,11 @@ mod serde_tests {
     #[test]
     fn command_and_kind_json_names() {
         assert_eq!(
-            serde_json::to_value(Command::FetchOverview).unwrap(),
-            serde_json::json!("fetchOverview")
+            serde_json::to_value(Command::FetchOverview {
+                context: "dev".into()
+            })
+            .unwrap(),
+            serde_json::json!({ "fetchOverview": { "context": "dev" } })
         );
         assert_eq!(
             serde_json::to_value(ResourceKind::BackendTLSPolicies).unwrap(),
@@ -714,6 +751,7 @@ mod serde_tests {
             serde_json::json!("httpRoutes")
         );
         let command = Command::FetchYaml {
+            context: "dev".into(),
             target: WatchTarget::Kind(ResourceKind::Pods),
             namespace: "default".into(),
             name: "app".into(),
@@ -723,11 +761,14 @@ mod serde_tests {
         let value = serde_json::to_value(&command).unwrap();
         assert_eq!(value["fetchYaml"]["revealSecrets"], true);
         assert_eq!(value["fetchYaml"]["target"]["kind"], "pods");
+        // Every cluster-touching command names the cluster it works on.
+        assert_eq!(value["fetchYaml"]["context"], "dev");
         assert_eq!(
             serde_json::to_value(Command::StopLogs).unwrap(),
             serde_json::json!("stopLogs")
         );
         let logs = Command::StartLogs {
+            context: "dev".into(),
             id: 4,
             kind: ResourceKind::Deployments,
             namespace: "default".into(),
@@ -743,10 +784,12 @@ mod serde_tests {
         assert!(logs["startLogs"]["pod"].is_null());
         assert!(logs["startLogs"]["container"].is_null());
         assert_eq!(logs["startLogs"]["name"], "app");
+        assert_eq!(logs["startLogs"]["context"], "dev");
         assert_eq!(logs["startLogs"]["previous"], true);
         assert_eq!(logs["startLogs"]["timestamps"], true);
         let bare: Command = serde_json::from_value(serde_json::json!({
             "startLogs": {
+                "context": "dev",
                 "id": 1,
                 "kind": "pods",
                 "namespace": "default",
@@ -773,6 +816,7 @@ mod serde_tests {
         );
         assert_eq!(
             serde_json::to_value(Command::FetchPodContainers {
+                context: "dev".into(),
                 namespace: "default".into(),
                 name: "app".into(),
                 uid: "1".into(),
@@ -782,10 +826,20 @@ mod serde_tests {
             true
         );
         let containers = AppEvent::PodContainers {
+            context: "dev".into(),
             uid: "1".into(),
             containers: Vec::new(),
         };
-        assert_eq!(serde_json::to_value(containers).unwrap()["podContainers"]["uid"], "1");
+        let containers = serde_json::to_value(containers).unwrap();
+        assert_eq!(containers["podContainers"]["uid"], "1");
+        assert_eq!(containers["podContainers"]["context"], "dev");
+        let rows = AppEvent::Rows {
+            context: "prod".into(),
+            target: WatchTarget::Kind(ResourceKind::Pods),
+            rows: Vec::new(),
+        };
+        let rows = serde_json::to_value(rows).unwrap();
+        assert_eq!(rows["rows"]["context"], "prod");
         assert_eq!(
             serde_json::to_value(Command::StopExecs).unwrap(),
             serde_json::json!("stopExecs")

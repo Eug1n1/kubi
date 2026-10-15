@@ -53,16 +53,19 @@ type Session = {
   tabs: Tab[];
   home: Home;
   pending: PendingSelect | null;
+  /** Usage samples, keyed `context|namespace|name` so clusters never mix. */
   usage: Record<string, [number, number]>;
-  defaultNamespace: string | null;
+  /** Default namespace per context. */
+  defaults: Record<string, string | null>;
   lastNamespace: string | null;
   nextId: number;
   started: number;
 };
 
-function blankTab(view: View, namespace: string | null, id: number): Tab {
+function blankTab(view: View, context: string, namespace: string | null, id: number): Tab {
   return {
     id,
+    context,
     view,
     rows: [],
     selected: null,
@@ -124,9 +127,9 @@ function execSnapshotOf(tab: DockExec): ExecSnapshot {
   };
 }
 
-function applyUsage(rows: ResourceRow[], usage: Record<string, [number, number]>): ResourceRow[] {
+function applyUsage(rows: ResourceRow[], context: string, usage: Record<string, [number, number]>): ResourceRow[] {
   return rows.map((row) => {
-    const sample = usage[`${row.namespace}/${row.name}`];
+    const sample = usage[`${context}|${row.namespace}/${row.name}`];
     if (!sample) return row;
     return { ...row, cpuMillis: sample[0], memBytes: sample[1] };
   });
@@ -140,18 +143,20 @@ export function useKubi() {
     home: "cluster",
     pending: null,
     usage: {},
-    defaultNamespace: null,
+    defaults: {},
     lastNamespace: null,
     nextId: 1,
     started: performance.now(),
   });
   const [contexts, setContexts] = useState<ContextInfo[]>([]);
+  /** Context the window is browsing; tabs carry their own and can differ. */
   const [context, setContext] = useState<string | null>(null);
-  const [namespaces, setNamespaces] = useState<string[]>([]);
+  /** Namespaces, custom resources and overview per context: one per cluster. */
+  const [namespaces, setNamespaces] = useState<Record<string, string[]>>({});
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState<number | null>(null);
   const [home, setHome] = useState<Home>("cluster");
-  const [customResources, setCustomResources] = useState<CrTarget[]>([]);
+  const [customResources, setCustomResources] = useState<Record<string, CrTarget[]>>({});
   const [errors, setErrors] = useState<string[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const refreshingRef = useRef(false);
@@ -159,7 +164,7 @@ export function useKubi() {
   const refreshTimer = useRef<number | null>(null);
   const [loadingConfig, setLoadingConfig] = useState(true);
   const [connecting, setConnecting] = useState(false);
-  const [overview, setOverview] = useState<ClusterOverview | null>(null);
+  const [overview, setOverview] = useState<Record<string, ClusterOverview>>({});
   const [metricsNote, setMetricsNote] = useState<string | null>(null);
   const [history, setHistory] = useState<HistPoint[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -369,7 +374,19 @@ export function useKubi() {
     const samePod = prior != null && (pod == null || pod === prior.pod);
     const previous = prior?.previous ?? false;
     const timestamps = prior?.timestamps ?? false;
-    void send({ startLogs: { id, kind, namespace, name, pod, container, previous, timestamps } });
+    void send({
+      startLogs: {
+        context: session.current.context ?? "",
+        id,
+        kind,
+        namespace,
+        name,
+        pod,
+        container,
+        previous,
+        timestamps,
+      },
+    });
     return {
       pane: "log",
       id,
@@ -439,7 +456,9 @@ export function useKubi() {
     if (previous) void send({ stopExec: { id: previous.id } });
     execSeq.current += 1;
     const id = execSeq.current;
-    void send({ startExec: { id, namespace, name, container } });
+    void send({
+      startExec: { context: session.current.context ?? "", id, namespace, name, container },
+    });
     return {
       pane: "exec",
       id,
@@ -621,7 +640,7 @@ export function useKubi() {
   function inherited(): string | null {
     const current = session.current;
     if (current.active != null) return current.tabs[current.active]?.namespace ?? null;
-    if (current.tabs.length === 0) return current.defaultNamespace;
+    if (current.tabs.length === 0) return current.defaults[current.context ?? ""] ?? null;
     return current.lastNamespace;
   }
 
@@ -633,6 +652,7 @@ export function useKubi() {
     if (!tab || !target || !row) return;
     void send({
       fetchYaml: {
+        context: tab.context,
         target,
         namespace: row.namespace,
         name: row.name,
@@ -659,7 +679,9 @@ export function useKubi() {
           : item,
       ),
     );
-    void send({ fetchEvents: { namespace: row.namespace, name: row.name, uid: row.uid } });
+    void send({
+      fetchEvents: { context: tab.context, namespace: row.namespace, name: row.name, uid: row.uid },
+    });
   }
 
   /**
@@ -673,7 +695,7 @@ export function useKubi() {
     const now = Date.now();
     if (!force && now - warningsAt.current < WARNINGS_TTL_MS) return;
     warningsAt.current = now;
-    void send({ fetchWarnings: { namespace: tab.namespace } });
+    void send({ fetchWarnings: { context: tab.context, namespace: tab.namespace } });
   }
 
   /** Reads the ConfigMaps and Secrets the selected pod refers to. */
@@ -686,7 +708,13 @@ export function useKubi() {
       items.map((item, i) => (i === index ? { ...item, sources: null, sourcesFor: row.uid } : item)),
     );
     void send({
-      fetchPodSources: { namespace: row.namespace, name: row.name, uid: row.uid, reveal: tab.reveal },
+      fetchPodSources: {
+        context: tab.context,
+        namespace: row.namespace,
+        name: row.name,
+        uid: row.uid,
+        reveal: tab.reveal,
+      },
     });
   }
 
@@ -700,7 +728,13 @@ export function useKubi() {
       items.map((item, i) => (i === index ? { ...item, containers: null, containersFor: row.uid } : item)),
     );
     void send({
-      fetchPodContainers: { namespace: row.namespace, name: row.name, uid: row.uid, reveal: tab.reveal },
+      fetchPodContainers: {
+        context: tab.context,
+        namespace: row.namespace,
+        name: row.name,
+        uid: row.uid,
+        reveal: tab.reveal,
+      },
     });
   }
 
@@ -708,24 +742,29 @@ export function useKubi() {
     const tab = session.current.tabs[index];
     if (!tab) return;
     session.current.active = index;
+    // The window follows the tab, so the rail and the sidebar agree with it.
+    session.current.context = tab.context;
     setActive(index);
+    setContext(tab.context);
     const target = watchOf(tab.view);
     if (!target) return;
     updateTabs((items) => items.map((item, i) => (i === index ? { ...item, waiting: true } : item)));
-    void send({ setNamespace: { namespace: tab.namespace } });
-    void send({ watch: { target } });
+    void send({ setNamespace: { context: tab.context, namespace: tab.namespace } });
+    void send({ watch: { context: tab.context, target } });
     if (tab.detailTab === "events") requestEvents(index);
     if (tab.detailTab === "sources") requestSources(index);
   }
 
   function showHome(next: Home) {
     if (session.current.active == null && session.current.home === next) return;
+    const current = session.current.context;
     session.current.home = next;
     session.current.active = null;
     setHome(next);
     setActive(null);
-    void send("stopWatch");
-    void send("fetchOverview");
+    if (!current) return;
+    void send({ stopWatch: { context: current } });
+    void send({ fetchOverview: { context: current } });
   }
 
   /** Point one tab at another namespace and restart its watch. */
@@ -762,8 +801,8 @@ export function useKubi() {
     session.current.usage = {};
     setHistory([]);
     const target = watchOf(session.current.tabs[index]?.view ?? tab.view);
-    void send({ setNamespace: { namespace } });
-    if (target) void send({ watch: { target } });
+    void send({ setNamespace: { context: tab.context, namespace } });
+    if (target) void send({ watch: { context: tab.context, target } });
   }
 
   function openView(view: View, namespace?: string | null) {
@@ -775,7 +814,9 @@ export function useKubi() {
       showHome("argo");
       return;
     }
-    const existing = session.current.tabs.findIndex((tab) => sameView(tab.view, view));
+    const existing = session.current.tabs.findIndex(
+      (tab) => tab.context === session.current.context && sameView(tab.view, view),
+    );
     if (existing >= 0) {
       if (namespace != null && session.current.tabs[existing]?.namespace !== namespace) {
         if (session.current.active !== existing) activate(existing);
@@ -786,7 +827,7 @@ export function useKubi() {
       activate(existing);
       return;
     }
-    const tab = blankTab(view, namespace === undefined ? inherited() : namespace, session.current.nextId);
+    const tab = blankTab(view, session.current.context ?? "", namespace === undefined ? inherited() : namespace, session.current.nextId);
     session.current.nextId += 1;
     commitTabs([...session.current.tabs, tab]);
     activate(session.current.tabs.length - 1);
@@ -888,6 +929,7 @@ export function useKubi() {
     ]);
     void send({
       startPortForward: {
+        context: session.current.context ?? "",
         id,
         namespace: draft.namespace,
         name: draft.name,
@@ -898,34 +940,35 @@ export function useKubi() {
     });
   }
 
+  /**
+   * Browsing a cluster is a focus change now: tabs of other clusters stay open,
+   * and so do their watches, log streams and port forwards.
+   */
   function switchContext(name: string) {
     if (session.current.context === name) return;
     session.current.context = name;
-    session.current.defaultNamespace = null;
     session.current.lastNamespace = null;
-    session.current.tabs = [];
-    session.current.active = null;
-    session.current.home = "cluster";
     session.current.pending = null;
-    session.current.usage = {};
     setContext(name);
-    setNamespaces([]);
-    setCustomResources([]);
-    setTabs([]);
-    setActive(null);
-    setHome("cluster");
     setPendingDelete(null);
     setMenu(null);
-    haltPane("log");
-    haltForwards();
-    haltPane("exec");
     setCreateOpen(false);
     setCreateError(null);
     setCreateBusy(false);
     setSearchOpen(false);
-    setOverview(null);
     setHistory([]);
     setMetricsNote(null);
+    // A cluster that already has tabs keeps its place: focus the newest one.
+    const mine = session.current.tabs.flatMap((tab, index) => (tab.context === name ? [index] : []));
+    const last = mine[mine.length - 1];
+    if (last != null) {
+      activate(last);
+      return;
+    }
+    session.current.home = "cluster";
+    session.current.active = null;
+    setActive(null);
+    setHome("cluster");
     setConnecting(true);
     void send({ connect: { context: name } });
   }
@@ -954,7 +997,7 @@ export function useKubi() {
       setContexts(event.contexts);
       if (event.contexts.length === 0) {
         setConnecting(false);
-        setCustomResources([]);
+        setCustomResources({});
         return;
       }
       const current = session.current.context;
@@ -970,11 +1013,12 @@ export function useKubi() {
     }
     if (key === "connected" && "connected" in event) {
       if (session.current.context !== event.connected.context) return;
-      setNamespaces(event.connected.namespaces);
-      session.current.defaultNamespace = event.connected.defaultNamespace;
+      const from = event.connected.context;
+      setNamespaces((all) => ({ ...all, [from]: event.connected.namespaces }));
+      session.current.defaults[from] = event.connected.defaultNamespace;
       setConnecting(false);
       clearErrors();
-      void send("fetchOverview");
+      void send({ fetchOverview: { context: from } });
       return;
     }
     if (key === "error" && "error" in event) {
@@ -986,19 +1030,21 @@ export function useKubi() {
     }
     if (key === "customResources" && "customResources" in event) {
       if (session.current.context !== event.customResources.context) return;
-      setCustomResources(event.customResources.targets);
+      const from = event.customResources.context;
+      setCustomResources((all) => ({ ...all, [from]: event.customResources.targets }));
       return;
     }
     if (key === "rows" && "rows" in event) {
-      const { target, rows } = event.rows;
-      const withUsage = applyUsage(rows, session.current.usage);
+      const { context: from, target, rows } = event.rows;
+      const withUsage = applyUsage(rows, from, session.current.usage);
       const observedAt = Date.now();
       const live = new Set(withUsage.map((row) => row.uid));
       const refreshYaml: number[] = [];
       updateTabs((items) =>
         items.map((tab, index) => {
           const watching = watchOf(tab.view);
-          if (!watching || !sameTarget(watching, target)) return tab;
+          // Rows belong to one cluster: a watch in another must not claim them.
+          if (!watching || tab.context !== from || !sameTarget(watching, target)) return tab;
           const selection = tab.selection.filter((uid) => live.has(uid));
           const selected = tab.selected != null && live.has(tab.selected) ? tab.selected : (selection[0] ?? null);
           const anchor = tab.anchor != null && live.has(tab.anchor) ? tab.anchor : selected;
@@ -1028,14 +1074,17 @@ export function useKubi() {
       return;
     }
     if (key === "usage" && "usage" in event) {
+      const from = event.usage.context;
       for (const sample of event.usage.samples) {
-        session.current.usage[`${sample.namespace}/${sample.name}`] = [sample.cpuMillis, sample.memBytes];
+        session.current.usage[`${from}|${sample.namespace}/${sample.name}`] = [sample.cpuMillis, sample.memBytes];
       }
       const index = session.current.active;
       const tab = index == null ? undefined : session.current.tabs[index];
-      if (tab?.view.kind === "resource" && tab.view.resource === event.usage.kind) {
+      if (tab?.context === from && tab.view.kind === "resource" && tab.view.resource === event.usage.kind) {
         updateTabs((items) =>
-          items.map((item, i) => (i === index ? { ...item, rows: applyUsage(item.rows, session.current.usage) } : item)),
+          items.map((item, i) =>
+            i === index ? { ...item, rows: applyUsage(item.rows, from, session.current.usage) } : item,
+          ),
         );
         const selected = session.current.tabs[index ?? -1]?.rows.find((row) => row.uid === tab.selected);
         const sample = event.usage.samples.find(
@@ -1048,7 +1097,11 @@ export function useKubi() {
     if (key === "metricsUnavailable" && "metricsUnavailable" in event) {
       const index = session.current.active;
       const tab = index == null ? undefined : session.current.tabs[index];
-      if (tab?.view.kind === "resource" && tab.view.resource === event.metricsUnavailable.kind) {
+      if (
+        tab?.context === event.metricsUnavailable.context &&
+        tab.view.kind === "resource" &&
+        tab.view.resource === event.metricsUnavailable.kind
+      ) {
         setMetricsNote(event.metricsUnavailable.message);
       }
       return;
@@ -1056,7 +1109,9 @@ export function useKubi() {
     if (key === "yaml" && "yaml" in event) {
       updateTabs((items) =>
         items.map((tab) =>
-          tab.selected === event.yaml.uid ? { ...tab, yaml: event.yaml.yaml, yamlFor: event.yaml.uid } : tab,
+          tab.context === event.yaml.context && tab.selected === event.yaml.uid
+            ? { ...tab, yaml: event.yaml.yaml, yamlFor: event.yaml.uid }
+            : tab,
         ),
       );
       return;
@@ -1064,7 +1119,7 @@ export function useKubi() {
     if (key === "objectData" && "objectData" in event) {
       updateTabs((items) =>
         items.map((tab) =>
-          tab.selected === event.objectData.uid
+          tab.context === event.objectData.context && tab.selected === event.objectData.uid
             ? { ...tab, data: event.objectData.entries, dataFor: event.objectData.uid }
             : tab,
         ),
@@ -1072,30 +1127,32 @@ export function useKubi() {
       return;
     }
     if (key === "objectEvents" && "objectEvents" in event) {
-      const { uid, events } = event.objectEvents;
+      const { context: from, uid, events } = event.objectEvents;
       updateTabs((items) =>
-        items.map((tab) => (tab.eventsFor === uid ? { ...tab, events } : tab)),
+        items.map((tab) => (tab.context === from && tab.eventsFor === uid ? { ...tab, events } : tab)),
       );
       return;
     }
     if (key === "podSources" && "podSources" in event) {
-      const { uid, mounts, env } = event.podSources;
+      const { context: from, uid, mounts, env } = event.podSources;
       updateTabs((items) =>
-        items.map((tab) => (tab.sourcesFor === uid ? { ...tab, sources: { mounts, env } } : tab)),
+        items.map((tab) =>
+          tab.context === from && tab.sourcesFor === uid ? { ...tab, sources: { mounts, env } } : tab,
+        ),
       );
       return;
     }
     if (key === "podContainers" && "podContainers" in event) {
-      const { uid, containers } = event.podContainers;
+      const { context: from, uid, containers } = event.podContainers;
       updateTabs((items) =>
-        items.map((tab) => (tab.containersFor === uid ? { ...tab, containers } : tab)),
+        items.map((tab) => (tab.context === from && tab.containersFor === uid ? { ...tab, containers } : tab)),
       );
       return;
     }
     if (key === "warnings" && "warnings" in event) {
       const byUid: Record<string, ObjectWarning> = {};
       for (const item of event.warnings.objects) byUid[item.uid] = item;
-      setWarnings({ scope: event.warnings.namespace, byUid });
+      setWarnings({ scope: `${event.warnings.context}|${event.warnings.namespace ?? ""}`, byUid });
       return;
     }
     if (key === "applyResult" && "applyResult" in event) {
@@ -1113,16 +1170,17 @@ export function useKubi() {
         const index = session.current.active;
         const tab = index == null ? undefined : session.current.tabs[index];
         const target = tab ? watchOf(tab.view) : null;
-        if (target) {
-          void send({ setNamespace: { namespace: tab?.namespace ?? null } });
-          void send({ watch: { target } });
+        if (tab && target) {
+          void send({ setNamespace: { context: tab.context, namespace: tab.namespace } });
+          void send({ watch: { context: tab.context, target } });
         }
       }
       return;
     }
     if (key === "overview" && "overview" in event) {
-      setOverview(event.overview);
-      if (session.current.active == null) endRefresh();
+      const from = event.overview.context;
+      setOverview((all) => ({ ...all, [from]: event.overview.overview }));
+      if (session.current.active == null && session.current.context === from) endRefresh();
       return;
     }
     if (key === "logStarted" && "logStarted" in event) {
@@ -1344,7 +1402,7 @@ export function useKubi() {
   useEffect(() => {
     if (active != null || !context) return;
     const id = window.setInterval(() => {
-      void send("fetchOverview");
+      void send({ fetchOverview: { context } });
     }, 15000);
     return () => window.clearInterval(id);
   }, [active, context]);
@@ -1417,7 +1475,10 @@ export function useKubi() {
 
   const activeTab = active == null ? null : (tabs[active] ?? null);
   const activeNamespace = activeTab?.namespace ?? null;
-  const scopeWarnings = warnings.scope === activeNamespace ? warnings.byUid : null;
+  // Everything the window shows belongs to the context it is browsing; tabs of
+  // other clusters keep their own state until they are focused again.
+  const scopeKey = `${context ?? ""}|${activeNamespace ?? ""}`;
+  const scopeWarnings = warnings.scope === scopeKey ? warnings.byUid : null;
 
   useEffect(() => {
     if (active == null || !context) return;
@@ -1429,17 +1490,19 @@ export function useKubi() {
   return {
     contexts,
     context,
-    namespaces,
+    namespaces: namespaces[context ?? ""] ?? [],
+    /** True once tabs from more than one cluster are open. */
+    clustered: new Set(tabs.map((tab) => tab.context)).size > 1,
     tabs,
     active,
     activeTab,
     home,
-    customResources,
+    customResources: customResources[context ?? ""] ?? [],
     errors,
     refreshing,
     loadingConfig,
     connecting,
-    overview,
+    overview: overview[context ?? ""] ?? null,
     metricsNote,
     history,
     searchOpen,
@@ -1468,20 +1531,28 @@ export function useKubi() {
       void send({ setKubeconfig: { path: picked } });
     },
     openView,
+    /** Focus an open tab: the window follows the cluster it belongs to. */
+    focusTab: (index: number) => activate(index),
     closeTab: (index: number) => {
+      const closing = session.current.tabs[index];
       const next = session.current.tabs.filter((_, i) => i !== index);
       const current = session.current.active;
       commitTabs(next);
+      // The last tab of a cluster ends its watch; other clusters keep theirs.
+      if (closing && !next.some((tab) => tab.context === closing.context)) {
+        void send({ stopWatch: { context: closing.context } });
+      }
       if (current == null) return;
       if (current > index) {
         session.current.active = current - 1;
         setActive(current - 1);
-      }         else if (current === index) {
+      } else if (current === index) {
         if (next.length === 0) {
           session.current.active = null;
           setActive(null);
-          void send("stopWatch");
-          void send("fetchOverview");
+          if (session.current.context) {
+            void send({ fetchOverview: { context: session.current.context } });
+          }
         } else {
           activate(Math.min(index, next.length - 1));
         }
@@ -1589,9 +1660,12 @@ export function useKubi() {
     refresh: () => {
       if (refreshingRef.current) return;
       beginRefresh();
-      void send("refreshCatalog");
-      if (session.current.active == null) void send("fetchOverview");
-      else activate(session.current.active);
+      const current = session.current.context;
+      if (!current) return;
+      void send({ refreshCatalog: { context: current } });
+      const index = session.current.active;
+      if (index == null) void send({ fetchOverview: { context: current } });
+      else activate(index);
     },
     askDelete: () => {
       const index = session.current.active;
@@ -1610,6 +1684,7 @@ export function useKubi() {
       for (const item of pendingDelete.items) {
         void send({
           delete: {
+            context: session.current.context ?? "",
             target: pendingDelete.target,
             namespace: item.namespace,
             name: item.name,
@@ -1624,7 +1699,14 @@ export function useKubi() {
       const tab = index == null ? undefined : session.current.tabs[index];
       if (!tab || tab.view.kind !== "resource" || !canRestart(tab.view.resource)) return;
       for (const row of selectedRows(tab)) {
-        void send({ restart: { kind: tab.view.resource, namespace: row.namespace, name: row.name } });
+        void send({
+          restart: {
+            context: tab.context,
+            kind: tab.view.resource,
+            namespace: row.namespace,
+            name: row.name,
+          },
+        });
       }
     },
     openCreate: () => {
@@ -1643,7 +1725,7 @@ export function useKubi() {
       applyKind.current = "create";
       setCreateBusy(true);
       setCreateError(null);
-      void send({ apply: { yaml: createYaml, namespace: tab?.namespace ?? null } });
+      void send({ apply: { context: tab?.context ?? "", yaml: createYaml, namespace: tab?.namespace ?? null } });
     },
     patchError,
     patchYaml: (yaml: string) => {
@@ -1651,7 +1733,7 @@ export function useKubi() {
       const tab = index == null ? undefined : session.current.tabs[index];
       applyKind.current = "patch";
       setPatchError(null);
-      void send({ apply: { yaml, namespace: tab?.namespace ?? null } });
+      void send({ apply: { context: tab?.context ?? "", yaml, namespace: tab?.namespace ?? null } });
     },
     forwards,
     forwardDraft,

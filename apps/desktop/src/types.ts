@@ -249,21 +249,33 @@ export type ClusterOverview = {
   argo: ArgoOverview | null;
 };
 
+/**
+ * Every command that touches a cluster names the context it works on, so one
+ * window can hold tabs for several clusters at once.
+ */
 export type Command =
   | "loadContexts"
-  | "stopWatch"
-  | "fetchOverview"
-  | { fetchEvents: { namespace: string; name: string; uid: string } }
-  | { fetchWarnings: { namespace: string | null } }
-  | { fetchPodSources: { namespace: string; name: string; uid: string; reveal: boolean } }
-  | { fetchPodContainers: { namespace: string; name: string; uid: string; reveal: boolean } }
-  | "refreshCatalog"
+  | "stopLogs"
+  | "stopPortForwards"
+  | "stopExecs"
   | { setKubeconfig: { path: string } }
   | { connect: { context: string } }
-  | { setNamespace: { namespace: string | null } }
-  | { watch: { target: WatchTarget } }
+  | { setNamespace: { context: string; namespace: string | null } }
+  | { watch: { context: string; target: WatchTarget } }
+  | { stopWatch: { context: string } }
+  | { fetchOverview: { context: string } }
+  | { fetchEvents: { context: string; namespace: string; name: string; uid: string } }
+  | { fetchWarnings: { context: string; namespace: string | null } }
+  | {
+      fetchPodSources: { context: string; namespace: string; name: string; uid: string; reveal: boolean };
+    }
+  | {
+      fetchPodContainers: { context: string; namespace: string; name: string; uid: string; reveal: boolean };
+    }
+  | { refreshCatalog: { context: string } }
   | {
       fetchYaml: {
+        context: string;
         target: WatchTarget;
         namespace: string;
         name: string;
@@ -271,10 +283,11 @@ export type Command =
         revealSecrets: boolean;
       };
     }
-  | { delete: { target: WatchTarget; namespace: string; name: string } }
-  | { restart: { kind: ResourceKind; namespace: string; name: string } }
+  | { delete: { context: string; target: WatchTarget; namespace: string; name: string } }
+  | { restart: { context: string; kind: ResourceKind; namespace: string; name: string } }
   | {
       startLogs: {
+        context: string;
         id: number;
         kind: ResourceKind;
         namespace: string;
@@ -288,10 +301,10 @@ export type Command =
       };
     }
   | { stopLog: { id: number } }
-  | "stopLogs"
-  | { apply: { yaml: string; namespace: string | null } }
+  | { apply: { context: string; yaml: string; namespace: string | null } }
   | {
       startPortForward: {
+        context: string;
         id: number;
         namespace: string;
         name: string;
@@ -301,12 +314,18 @@ export type Command =
       };
     }
   | { stopPortForward: { id: number } }
-  | "stopPortForwards"
-  | { startExec: { id: number; namespace: string; name: string; container: string | null } }
+  | {
+      startExec: {
+        context: string;
+        id: number;
+        namespace: string;
+        name: string;
+        container: string | null;
+      };
+    }
   | { execInput: { id: number; data: string } }
   | { execResize: { id: number; cols: number; rows: number } }
-  | { stopExec: { id: number } }
-  | "stopExecs";
+  | { stopExec: { id: number } };
 
 export type AppEvent =
   | { contexts: ContextInfo[] }
@@ -318,18 +337,18 @@ export type AppEvent =
       };
     }
   | { error: string }
-  | { rows: { target: WatchTarget; rows: ResourceRow[] } }
+  | { rows: { context: string; target: WatchTarget; rows: ResourceRow[] } }
   | { customResources: { context: string; targets: CrTarget[] } }
-  | { usage: { kind: ResourceKind; samples: UsageSample[] } }
-  | { metricsUnavailable: { kind: ResourceKind; message: string } }
-  | { yaml: { uid: string; yaml: string } }
-  | { objectData: { uid: string; entries: DataEntry[] } }
-  | { objectEvents: { uid: string; events: EventInfo[] } }
-  | { warnings: { namespace: string | null; objects: ObjectWarning[] } }
-  | { podSources: { uid: string } & PodSources }
-  | { podContainers: { uid: string; containers: PodContainer[] } }
-  | { applyResult: { error: string | null } }
-  | { overview: ClusterOverview }
+  | { usage: { context: string; kind: ResourceKind; samples: UsageSample[] } }
+  | { metricsUnavailable: { context: string; kind: ResourceKind; message: string } }
+  | { yaml: { context: string; uid: string; yaml: string } }
+  | { objectData: { context: string; uid: string; entries: DataEntry[] } }
+  | { objectEvents: { context: string; uid: string; events: EventInfo[] } }
+  | { warnings: { context: string; namespace: string | null; objects: ObjectWarning[] } }
+  | { podSources: { context: string; uid: string } & PodSources }
+  | { podContainers: { context: string; uid: string; containers: PodContainer[] } }
+  | { applyResult: { context: string; error: string | null } }
+  | { overview: { context: string; overview: ClusterOverview } }
   | {
       logStarted: {
         id: number;
@@ -444,6 +463,8 @@ export type RowMenu = {
 
 export type Tab = {
   id: number;
+  /** Cluster this tab belongs to. Tabs of several clusters can be open at once. */
+  context: string;
   view: View;
   rows: ResourceRow[];
   selected: string | null;

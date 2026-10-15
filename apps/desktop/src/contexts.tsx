@@ -393,6 +393,8 @@ export function ContextRail({ kubi }: { kubi: Kubi }) {
   const blocks = rows.filter((row) => row.items.length > 0).map((row) => row.items);
   if (loose.length > 0) blocks.push(loose);
   const strip = blocks.flat();
+  /** Contexts with tabs open in this window, so the rail shows where work lives. */
+  const openTabs = new Set(kubi.tabs.map((tab) => tab.context));
 
   function chip(item: ContextInfo) {
     return (
@@ -436,6 +438,9 @@ export function ContextRail({ kubi }: { kubi: Kubi }) {
       >
         <i className="strip" style={{ background: clusterColor(item.name) }} />
         <span className="ctx-name">{item.name}</span>
+        {openTabs.has(item.name) ? (
+          <span className="ctx-open" title="Open in this window" aria-label="Open in this window" />
+        ) : null}
         <span className="muted">{item.cluster}</span>
       </button>
     );

@@ -54,7 +54,7 @@ use crate::rows::{
 };
 
 macro_rules! watch_ns {
-    ($client:expr, $namespace:expr, $kind:expr, $ty:ty, $row:path, $cancel:expr, $events:expr) => {
+    ($context:expr, $client:expr, $namespace:expr, $kind:expr, $ty:ty, $row:path, $cancel:expr, $events:expr) => {
         spawn_watch(
             namespaced::<$ty>($client, $namespace),
             WatchTarget::Kind($kind),
@@ -62,12 +62,13 @@ macro_rules! watch_ns {
             $cancel,
             $events,
             None,
+            $context,
         );
     };
 }
 
 macro_rules! watch_cluster {
-    ($client:expr, $kind:expr, $ty:ty, $row:path, $cancel:expr, $events:expr) => {
+    ($context:expr, $client:expr, $kind:expr, $ty:ty, $row:path, $cancel:expr, $events:expr) => {
         spawn_watch(
             Api::<$ty>::all($client),
             WatchTarget::Kind($kind),
@@ -75,6 +76,7 @@ macro_rules! watch_cluster {
             $cancel,
             $events,
             None,
+            $context,
         );
     };
 }
@@ -162,15 +164,21 @@ impl CoreHandle {
 struct Engine {
     events: std::sync::mpsc::Sender<AppEvent>,
     kubeconfig_path: Option<PathBuf>,
+    /// One client per context: connecting to another cluster keeps this one.
     clients: std::collections::HashMap<String, Client>,
+    /// Context the window is showing; new tabs and the sidebar follow it.
     context: Option<String>,
-    namespace: Option<String>,
-    watch: Option<CancellationToken>,
-    catalog: Option<CancellationToken>,
+    /// Namespace scope per context, so each cluster keeps its own.
+    namespaces: std::collections::HashMap<String, Option<String>>,
+    /// Live watch per context: a list in one cluster keeps updating while the
+    /// window looks at another.
+    watches: std::collections::HashMap<String, CancellationToken>,
+    /// Custom resource catalog per context.
+    catalogs: std::collections::HashMap<String, CancellationToken>,
     logs: std::collections::HashMap<u64, CancellationToken>,
     forwards: std::collections::HashMap<u64, CancellationToken>,
     execs: std::collections::HashMap<u64, ExecSlot>,
-    argo_cache: std::sync::Arc<std::sync::Mutex<Option<(String, ArgoTargets)>>>,
+    argo_cache: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, ArgoTargets>>>,
 }
 
 struct ExecSlot {
@@ -196,13 +204,13 @@ impl Engine {
             kubeconfig_path: None,
             clients: std::collections::HashMap::new(),
             context: None,
-            namespace: None,
-            watch: None,
-            catalog: None,
+            namespaces: std::collections::HashMap::new(),
+            watches: std::collections::HashMap::new(),
+            catalogs: std::collections::HashMap::new(),
             logs: std::collections::HashMap::new(),
             forwards: std::collections::HashMap::new(),
             execs: std::collections::HashMap::new(),
-            argo_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            argo_cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -210,61 +218,73 @@ impl Engine {
         match command {
             Command::LoadContexts => self.emit_contexts(),
             Command::SetKubeconfig { path } => {
-                self.stop_watch();
-                self.stop_catalog();
+                self.stop_watches();
+                self.stop_catalogs();
                 self.stop_logs();
                 self.stop_forwards();
                 self.stop_execs();
                 self.clear_argo_cache();
                 self.clients.clear();
+                self.namespaces.clear();
                 self.kubeconfig_path = Some(path);
                 self.emit_contexts();
             }
             Command::Connect { context } => self.connect(context).await,
-            Command::SetNamespace { namespace } => self.namespace = namespace,
-            Command::Watch { target } => match target {
-                WatchTarget::Kind(kind) => self.start_watch(kind),
-                WatchTarget::Custom(target) => self.start_custom_watch(target),
+            Command::SetNamespace { context, namespace } => {
+                self.namespaces.insert(context, namespace);
+            }
+            Command::Watch { context, target } => match target {
+                WatchTarget::Kind(kind) => self.start_watch(context, kind),
+                WatchTarget::Custom(target) => self.start_custom_watch(context, target),
             },
-            Command::StopWatch => self.stop_watch(),
+            Command::StopWatch { context } => self.stop_watch(&context),
             Command::FetchYaml {
+                context,
                 target,
                 namespace,
                 name,
                 uid,
                 reveal_secrets,
-            } => self.spawn_fetch(target, namespace, name, uid, reveal_secrets),
-            Command::FetchOverview => self.fetch_overview(),
+            } => self.spawn_fetch(context, target, namespace, name, uid, reveal_secrets),
+            Command::FetchOverview { context } => self.fetch_overview(context),
             Command::FetchEvents {
+                context,
                 namespace,
                 name,
                 uid,
-            } => self.spawn_events(namespace, name, uid),
-            Command::FetchWarnings { namespace } => self.spawn_warnings(namespace),
+            } => self.spawn_events(context, namespace, name, uid),
+            Command::FetchWarnings { context, namespace } => {
+                self.spawn_warnings(context, namespace)
+            }
             Command::FetchPodSources {
+                context,
                 namespace,
                 name,
                 uid,
                 reveal,
-            } => self.spawn_pod_sources(namespace, name, uid, reveal),
+            } => self.spawn_pod_sources(context, namespace, name, uid, reveal),
             Command::FetchPodContainers {
+                context,
                 namespace,
                 name,
                 uid,
                 reveal,
-            } => self.spawn_pod_containers(namespace, name, uid, reveal),
-            Command::RefreshCatalog => self.start_catalog(),
+            } => self.spawn_pod_containers(context, namespace, name, uid, reveal),
+            Command::RefreshCatalog { context } => self.start_catalog(&context),
             Command::Delete {
+                context,
                 target,
                 namespace,
                 name,
-            } => self.spawn_delete(target, namespace, name),
+            } => self.spawn_delete(context, target, namespace, name),
             Command::Restart {
+                context,
                 kind,
                 namespace,
                 name,
-            } => self.spawn_restart(kind, namespace, name),
+            } => self.spawn_restart(context, kind, namespace, name),
             Command::StartLogs {
+                context,
                 id,
                 kind,
                 namespace,
@@ -273,26 +293,42 @@ impl Engine {
                 container,
                 previous,
                 timestamps,
-            } => self.start_logs(id, kind, namespace, name, pod, container, previous, timestamps),
+            } => self.start_logs(
+                context,
+                id,
+                kind,
+                namespace,
+                name,
+                pod,
+                container,
+                previous,
+                timestamps,
+            ),
             Command::StopLog { id } => self.stop_log(id),
             Command::StopLogs => self.stop_logs(),
-            Command::Apply { yaml, namespace } => self.spawn_apply(yaml, namespace),
+            Command::Apply {
+                context,
+                yaml,
+                namespace,
+            } => self.spawn_apply(context, yaml, namespace),
             Command::StartPortForward {
+                context,
                 id,
                 namespace,
                 name,
                 kind,
                 local_port,
                 remote_port,
-            } => self.start_forward(id, namespace, name, kind, local_port, remote_port),
+            } => self.start_forward(context, id, namespace, name, kind, local_port, remote_port),
             Command::StopPortForward { id } => self.stop_forward(id),
             Command::StopPortForwards => self.stop_forwards(),
             Command::StartExec {
+                context,
                 id,
                 namespace,
                 name,
                 container,
-            } => self.start_exec(id, namespace, name, container),
+            } => self.start_exec(context, id, namespace, name, container),
             Command::ExecInput { id, data } => self.exec_input(id, data),
             Command::ExecResize { id, cols, rows } => self.exec_resize(id, cols, rows),
             Command::StopExec { id } => self.stop_exec(id),
@@ -315,13 +351,10 @@ impl Engine {
         }
     }
 
+    /// Connects to `context` and makes it the one the window shows. Other
+    /// clusters keep their clients, watches and streams: that is why every
+    /// command names the context it works on.
     async fn connect(&mut self, context: String) {
-        self.stop_watch();
-        self.stop_catalog();
-        self.stop_logs();
-        self.stop_forwards();
-        self.stop_execs();
-        self.clear_argo_cache();
         let client = match build_client(self.kubeconfig_path.as_deref(), &context).await {
             Ok(client) => client,
             Err(err) => {
@@ -341,8 +374,9 @@ impl Engine {
         let default_namespace = load_kubeconfig(self.kubeconfig_path.as_deref())
             .ok()
             .and_then(|kubeconfig| namespace_of(&kubeconfig, &context));
-        self.namespace = default_namespace.clone();
-        self.start_catalog();
+        self.namespaces
+            .insert(context.clone(), default_namespace.clone());
+        self.start_catalog(&context);
         self.emit(AppEvent::Connected {
             context,
             namespaces,
@@ -350,20 +384,30 @@ impl Engine {
         });
     }
 
-    fn current_client(&self) -> Option<Client> {
-        let context = self.context.as_ref()?;
+    /// The client for one context, or `None` when it was never connected.
+    fn client_for(&self, context: &str) -> Option<Client> {
         self.clients.get(context).cloned()
     }
 
-    fn start_watch(&mut self, kind: ResourceKind) {
-        let Some(client) = self.current_client() else {
-            self.emit_error("Not connected to a cluster");
+    /// The client for one context, telling the UI when there is none.
+    fn require_client(&self, context: &str) -> Option<Client> {
+        match self.client_for(context) {
+            Some(client) => Some(client),
+            None => {
+                self.emit_error(format!("Not connected to cluster {context}"));
+                None
+            }
+        }
+    }
+
+    fn start_watch(&mut self, context: String, kind: ResourceKind) {
+        let Some(client) = self.require_client(&context) else {
             return;
         };
-        self.stop_watch();
+        self.stop_watch(&context);
         let cancel = CancellationToken::new();
-        self.watch = Some(cancel.clone());
-        let namespace = self.namespace.clone();
+        self.watches.insert(context.clone(), cancel.clone());
+        let namespace = self.namespaces.get(&context).cloned().flatten();
         let events = self.events.clone();
         match kind {
             ResourceKind::Pods => {
@@ -374,8 +418,9 @@ impl Engine {
                     cancel.clone(),
                     events.clone(),
                     None,
+                    context.clone(),
                 );
-                spawn_metrics(kind, cancel, events, move || {
+                spawn_metrics(context.clone(), kind, cancel, events, move || {
                     let client = client.clone();
                     let namespace = namespace.clone();
                     Box::pin(async move {
@@ -393,8 +438,9 @@ impl Engine {
                     cancel.clone(),
                     events.clone(),
                     None,
+                    context.clone(),
                 );
-                spawn_metrics(kind, cancel, events, move || {
+                spawn_metrics(context.clone(), kind, cancel, events, move || {
                     let client = client.clone();
                     Box::pin(async move {
                         let items = list_all(Api::<NodeMetrics>::all(client)).await?;
@@ -403,10 +449,10 @@ impl Engine {
                 });
             }
             ResourceKind::Events => {
-                watch_ns!(client, &namespace, kind, Event, event_row, cancel, events);
+                watch_ns!(context.clone(), client, &namespace, kind, Event, event_row, cancel, events);
             }
             ResourceKind::Deployments => {
-                watch_ns!(
+                watch_ns!(context.clone(), 
                     client,
                     &namespace,
                     kind,
@@ -417,7 +463,7 @@ impl Engine {
                 );
             }
             ResourceKind::ReplicaSets => {
-                watch_ns!(
+                watch_ns!(context.clone(), 
                     client,
                     &namespace,
                     kind,
@@ -428,7 +474,7 @@ impl Engine {
                 );
             }
             ResourceKind::StatefulSets => {
-                watch_ns!(
+                watch_ns!(context.clone(), 
                     client,
                     &namespace,
                     kind,
@@ -439,7 +485,7 @@ impl Engine {
                 );
             }
             ResourceKind::DaemonSets => {
-                watch_ns!(
+                watch_ns!(context.clone(), 
                     client,
                     &namespace,
                     kind,
@@ -450,10 +496,10 @@ impl Engine {
                 );
             }
             ResourceKind::Jobs => {
-                watch_ns!(client, &namespace, kind, Job, job_row, cancel, events);
+                watch_ns!(context.clone(), client, &namespace, kind, Job, job_row, cancel, events);
             }
             ResourceKind::CronJobs => {
-                watch_ns!(
+                watch_ns!(context.clone(), 
                     client,
                     &namespace,
                     kind,
@@ -464,7 +510,7 @@ impl Engine {
                 );
             }
             ResourceKind::Services => {
-                watch_ns!(
+                watch_ns!(context.clone(), 
                     client,
                     &namespace,
                     kind,
@@ -475,7 +521,7 @@ impl Engine {
                 );
             }
             ResourceKind::Endpoints => {
-                watch_ns!(
+                watch_ns!(context.clone(), 
                     client,
                     &namespace,
                     kind,
@@ -486,7 +532,7 @@ impl Engine {
                 );
             }
             ResourceKind::EndpointSlices => {
-                watch_ns!(
+                watch_ns!(context.clone(), 
                     client,
                     &namespace,
                     kind,
@@ -497,7 +543,7 @@ impl Engine {
                 );
             }
             ResourceKind::Ingresses => {
-                watch_ns!(
+                watch_ns!(context.clone(), 
                     client,
                     &namespace,
                     kind,
@@ -508,7 +554,7 @@ impl Engine {
                 );
             }
             ResourceKind::NetworkPolicies => {
-                watch_ns!(
+                watch_ns!(context.clone(), 
                     client,
                     &namespace,
                     kind,
@@ -519,7 +565,7 @@ impl Engine {
                 );
             }
             ResourceKind::ConfigMaps => {
-                watch_ns!(
+                watch_ns!(context.clone(), 
                     client,
                     &namespace,
                     kind,
@@ -530,10 +576,10 @@ impl Engine {
                 );
             }
             ResourceKind::Secrets => {
-                watch_ns!(client, &namespace, kind, Secret, secret_row, cancel, events);
+                watch_ns!(context.clone(), client, &namespace, kind, Secret, secret_row, cancel, events);
             }
             ResourceKind::ResourceQuotas => {
-                watch_ns!(
+                watch_ns!(context.clone(), 
                     client,
                     &namespace,
                     kind,
@@ -544,7 +590,7 @@ impl Engine {
                 );
             }
             ResourceKind::LimitRanges => {
-                watch_ns!(
+                watch_ns!(context.clone(), 
                     client,
                     &namespace,
                     kind,
@@ -555,7 +601,7 @@ impl Engine {
                 );
             }
             ResourceKind::HorizontalPodAutoscalers => {
-                watch_ns!(
+                watch_ns!(context.clone(), 
                     client,
                     &namespace,
                     kind,
@@ -566,7 +612,7 @@ impl Engine {
                 );
             }
             ResourceKind::PodDisruptionBudgets => {
-                watch_ns!(
+                watch_ns!(context.clone(), 
                     client,
                     &namespace,
                     kind,
@@ -577,7 +623,7 @@ impl Engine {
                 );
             }
             ResourceKind::PersistentVolumeClaims => {
-                watch_ns!(
+                watch_ns!(context.clone(), 
                     client,
                     &namespace,
                     kind,
@@ -588,7 +634,7 @@ impl Engine {
                 );
             }
             ResourceKind::ServiceAccounts => {
-                watch_ns!(
+                watch_ns!(context.clone(), 
                     client,
                     &namespace,
                     kind,
@@ -599,10 +645,10 @@ impl Engine {
                 );
             }
             ResourceKind::Roles => {
-                watch_ns!(client, &namespace, kind, Role, role_row, cancel, events);
+                watch_ns!(context.clone(), client, &namespace, kind, Role, role_row, cancel, events);
             }
             ResourceKind::RoleBindings => {
-                watch_ns!(
+                watch_ns!(context.clone(), 
                     client,
                     &namespace,
                     kind,
@@ -613,22 +659,22 @@ impl Engine {
                 );
             }
             ResourceKind::Namespaces => {
-                watch_cluster!(client, kind, Namespace, namespace_row, cancel, events);
+                watch_cluster!(context.clone(), client, kind, Namespace, namespace_row, cancel, events);
             }
             ResourceKind::IngressClasses => {
-                watch_cluster!(client, kind, IngressClass, ingressclass_row, cancel, events);
+                watch_cluster!(context.clone(), client, kind, IngressClass, ingressclass_row, cancel, events);
             }
             ResourceKind::PersistentVolumes => {
-                watch_cluster!(client, kind, PersistentVolume, pv_row, cancel, events);
+                watch_cluster!(context.clone(), client, kind, PersistentVolume, pv_row, cancel, events);
             }
             ResourceKind::StorageClasses => {
-                watch_cluster!(client, kind, StorageClass, storageclass_row, cancel, events);
+                watch_cluster!(context.clone(), client, kind, StorageClass, storageclass_row, cancel, events);
             }
             ResourceKind::ClusterRoles => {
-                watch_cluster!(client, kind, ClusterRole, clusterrole_row, cancel, events);
+                watch_cluster!(context.clone(), client, kind, ClusterRole, clusterrole_row, cancel, events);
             }
             ResourceKind::ClusterRoleBindings => {
-                watch_cluster!(
+                watch_cluster!(context.clone(), 
                     client,
                     kind,
                     ClusterRoleBinding,
@@ -645,6 +691,7 @@ impl Engine {
                     cancel,
                     events,
                     Some(5),
+                    context.clone(),
                 );
             }
             ResourceKind::GatewayClasses
@@ -666,21 +713,22 @@ impl Engine {
                     cancel,
                     events,
                     None,
+                    context.clone(),
                 );
             }
         }
     }
 
-    fn start_custom_watch(&mut self, target: CrTarget) {
-        let Some(client) = self.current_client() else {
-            self.emit_error("Not connected to a cluster");
+    fn start_custom_watch(&mut self, context: String, target: CrTarget) {
+        let Some(client) = self.require_client(&context) else {
             return;
         };
-        self.stop_watch();
+        self.stop_watch(&context);
         let cancel = CancellationToken::new();
-        self.watch = Some(cancel.clone());
+        self.watches.insert(context.clone(), cancel.clone());
         let resource = resource_of(&target.group, &target.version, &target.kind, &target.plural);
-        let api = dynamic_api(client, &resource, target.namespaced, &self.namespace);
+        let namespace = self.namespaces.get(&context).cloned().flatten();
+        let api = dynamic_api(client, &resource, target.namespaced, &namespace);
         spawn_watch(
             api,
             WatchTarget::Custom(target),
@@ -688,30 +736,43 @@ impl Engine {
             cancel,
             self.events.clone(),
             None,
+            context,
         );
     }
 
-    fn start_catalog(&mut self) {
-        self.stop_catalog();
-        let Some(client) = self.current_client() else {
-            return;
-        };
-        let Some(context) = self.context.clone() else {
+    /// Reads the CRDs a cluster serves. One catalog per context, so a custom
+    /// resource list survives switching to another cluster.
+    fn start_catalog(&mut self, context: &str) {
+        self.stop_catalog(context);
+        let Some(client) = self.client_for(context) else {
             return;
         };
         let cancel = CancellationToken::new();
-        self.catalog = Some(cancel.clone());
-        spawn_catalog(client, context, cancel, self.events.clone());
+        self.catalogs
+            .insert(context.to_string(), cancel.clone());
+        spawn_catalog(client, context.to_string(), cancel, self.events.clone());
     }
 
-    fn stop_watch(&mut self) {
-        if let Some(token) = self.watch.take() {
+    fn stop_watch(&mut self, context: &str) {
+        if let Some(token) = self.watches.remove(context) {
             token.cancel();
         }
     }
 
-    fn stop_catalog(&mut self) {
-        if let Some(token) = self.catalog.take() {
+    fn stop_watches(&mut self) {
+        for (_, token) in self.watches.drain() {
+            token.cancel();
+        }
+    }
+
+    fn stop_catalog(&mut self, context: &str) {
+        if let Some(token) = self.catalogs.remove(context) {
+            token.cancel();
+        }
+    }
+
+    fn stop_catalogs(&mut self) {
+        for (_, token) in self.catalogs.drain() {
             token.cancel();
         }
     }
@@ -730,7 +791,7 @@ impl Engine {
 
     fn clear_argo_cache(&self) {
         if let Ok(mut cache) = self.argo_cache.lock() {
-            *cache = None;
+            cache.clear();
         }
     }
 
@@ -748,6 +809,7 @@ impl Engine {
 
     fn start_forward(
         &mut self,
+        context: String,
         id: u64,
         namespace: String,
         name: String,
@@ -756,8 +818,7 @@ impl Engine {
         remote_port: u16,
     ) {
         self.stop_forward(id);
-        let Some(client) = self.current_client() else {
-            self.emit_error("Not connected to a cluster");
+        let Some(client) = self.require_client(&context) else {
             self.emit(AppEvent::PortForwardClosed { id });
             return;
         };
@@ -803,10 +864,16 @@ impl Engine {
         }
     }
 
-    fn start_exec(&mut self, id: u64, namespace: String, name: String, container: Option<String>) {
+    fn start_exec(
+        &mut self,
+        context: String,
+        id: u64,
+        namespace: String,
+        name: String,
+        container: Option<String>,
+    ) {
         self.stop_exec(id);
-        let Some(client) = self.current_client() else {
-            self.emit_error("Not connected to a cluster");
+        let Some(client) = self.require_client(&context) else {
             self.emit(AppEvent::ExecClosed { id });
             return;
         };
@@ -863,6 +930,7 @@ impl Engine {
 
     fn start_logs(
         &mut self,
+        context: String,
         id: u64,
         kind: ResourceKind,
         namespace: String,
@@ -873,8 +941,7 @@ impl Engine {
         timestamps: bool,
     ) {
         self.stop_log(id);
-        let Some(client) = self.current_client() else {
-            self.emit_error("Not connected to a cluster");
+        let Some(client) = self.require_client(&context) else {
             self.emit(AppEvent::LogClosed { id });
             return;
         };
@@ -899,9 +966,8 @@ impl Engine {
         });
     }
 
-    fn spawn_delete(&self, target: WatchTarget, namespace: String, name: String) {
-        let Some(client) = self.current_client() else {
-            self.emit_error("Not connected to a cluster");
+    fn spawn_delete(&self, context: String, target: WatchTarget, namespace: String, name: String) {
+        let Some(client) = self.require_client(&context) else {
             return;
         };
         let events = self.events.clone();
@@ -920,9 +986,8 @@ impl Engine {
         });
     }
 
-    fn spawn_restart(&self, kind: ResourceKind, namespace: String, name: String) {
-        let Some(client) = self.current_client() else {
-            self.emit_error("Not connected to a cluster");
+    fn spawn_restart(&self, context: String, kind: ResourceKind, namespace: String, name: String) {
+        let Some(client) = self.require_client(&context) else {
             return;
         };
         let events = self.events.clone();
@@ -933,9 +998,10 @@ impl Engine {
         });
     }
 
-    fn spawn_apply(&self, yaml: String, namespace: Option<String>) {
-        let Some(client) = self.current_client() else {
+    fn spawn_apply(&self, context: String, yaml: String, namespace: Option<String>) {
+        let Some(client) = self.client_for(&context) else {
             self.emit(AppEvent::ApplyResult {
+                context,
                 error: Some("Not connected to a cluster".to_string()),
             });
             return;
@@ -945,38 +1011,47 @@ impl Engine {
             let error = apply_documents(&client, &yaml, namespace.as_deref())
                 .await
                 .err();
-            let _ = events.send(AppEvent::ApplyResult { error });
+            let _ = events.send(AppEvent::ApplyResult { context, error });
         });
     }
 
     fn spawn_fetch(
         &self,
+        context: String,
         target: WatchTarget,
         namespace: String,
         name: String,
         uid: String,
         reveal_secrets: bool,
     ) {
-        let Some(client) = self.current_client() else {
-            self.emit_error("Not connected to a cluster");
+        let Some(client) = self.require_client(&context) else {
             return;
         };
         let events = self.events.clone();
         tokio::spawn(async move {
-            load_detail(client, target, namespace, name, uid, reveal_secrets, events).await;
+            load_detail(
+                client,
+                context,
+                target,
+                namespace,
+                name,
+                uid,
+                reveal_secrets,
+                events,
+            )
+            .await;
         });
     }
 
-    fn spawn_events(&self, namespace: String, name: String, uid: String) {
-        let Some(client) = self.current_client() else {
-            self.emit_error("Not connected to a cluster");
+    fn spawn_events(&self, context: String, namespace: String, name: String, uid: String) {
+        let Some(client) = self.require_client(&context) else {
             return;
         };
         let events = self.events.clone();
         tokio::spawn(async move {
             match object_events(&client, &namespace, &name, &uid).await {
                 Ok(list) => {
-                    let _ = events.send(AppEvent::ObjectEvents { uid, events: list });
+                    let _ = events.send(AppEvent::ObjectEvents { context, uid, events: list });
                 }
                 Err(err) => {
                     let _ = events.send(AppEvent::Error(format!("events {name}: {err}")));
@@ -987,16 +1062,27 @@ impl Engine {
 
     /// Reads the ConfigMaps and Secrets a pod refers to, so the panel can show
     /// resolved mounts and environment values.
-    fn spawn_pod_sources(&self, namespace: String, name: String, uid: String, reveal: bool) {
-        let Some(client) = self.current_client() else {
-            self.emit_error("Not connected to a cluster");
+    fn spawn_pod_sources(
+        &self,
+        context: String,
+        namespace: String,
+        name: String,
+        uid: String,
+        reveal: bool,
+    ) {
+        let Some(client) = self.require_client(&context) else {
             return;
         };
         let events = self.events.clone();
         tokio::spawn(async move {
             match load_pod_sources(&client, &namespace, &name, reveal).await {
                 Ok((mounts, env)) => {
-                    let _ = events.send(AppEvent::PodSources { uid, mounts, env });
+                    let _ = events.send(AppEvent::PodSources {
+                        context,
+                        uid,
+                        mounts,
+                        env,
+                    });
                 }
                 Err(err) => {
                     let _ = events.send(AppEvent::Error(format!("sources {name}: {err}")));
@@ -1007,16 +1093,26 @@ impl Engine {
 
     /// Spec and live status of every container of a pod, for the Containers
     /// block of the object panel.
-    fn spawn_pod_containers(&self, namespace: String, name: String, uid: String, reveal: bool) {
-        let Some(client) = self.current_client() else {
-            self.emit_error("Not connected to a cluster");
+    fn spawn_pod_containers(
+        &self,
+        context: String,
+        namespace: String,
+        name: String,
+        uid: String,
+        reveal: bool,
+    ) {
+        let Some(client) = self.require_client(&context) else {
             return;
         };
         let events = self.events.clone();
         tokio::spawn(async move {
             match load_pod_containers(&client, &namespace, &name, reveal).await {
                 Ok(containers) => {
-                    let _ = events.send(AppEvent::PodContainers { uid, containers });
+                    let _ = events.send(AppEvent::PodContainers {
+                        context,
+                        uid,
+                        containers,
+                    });
                 }
                 Err(err) => {
                     let _ = events.send(AppEvent::Error(format!("containers {name}: {err}")));
@@ -1027,9 +1123,8 @@ impl Engine {
 
     /// Scans warning events once for the whole list, so rows can be marked
     /// before the user opens any of them.
-    fn spawn_warnings(&self, namespace: Option<String>) {
-        let Some(client) = self.current_client() else {
-            self.emit_error("Not connected to a cluster");
+    fn spawn_warnings(&self, context: String, namespace: Option<String>) {
+        let Some(client) = self.require_client(&context) else {
             return;
         };
         let events = self.events.clone();
@@ -1041,28 +1136,31 @@ impl Engine {
             match list_query(api, "", "type=Warning").await {
                 Ok(list) => {
                     let _ = events.send(AppEvent::Warnings {
+                        context,
                         namespace,
                         objects: aggregate_warnings(&list),
                     });
                 }
                 Err(err) => {
-                    let _ = events.send(AppEvent::Error(format!("warnings: {err}")));
+                    let _ = events.send(AppEvent::Error(format!("warnings {context}: {err}")));
                 }
             }
         });
     }
 
-    fn fetch_overview(&self) {
-        let Some(client) = self.current_client() else {
+    fn fetch_overview(&self, context: String) {
+        let Some(client) = self.client_for(&context) else {
             return;
         };
-        let context = self.context.clone().unwrap_or_default();
         let events = self.events.clone();
         let cache = self.argo_cache.clone();
         tokio::spawn(async move {
-            match overview(&client, context, cache).await {
+            match overview(&client, context.clone(), cache).await {
                 Ok(snapshot) => {
-                    let _ = events.send(AppEvent::Overview(Box::new(snapshot)));
+                    let _ = events.send(AppEvent::Overview {
+                        context,
+                        overview: Box::new(snapshot),
+                    });
                 }
                 Err(err) => {
                     let _ = events.send(AppEvent::Error(err));
@@ -1092,6 +1190,7 @@ fn spawn_watch<K>(
     cancel: CancellationToken,
     events: std::sync::mpsc::Sender<AppEvent>,
     page_size: Option<u32>,
+    context: String,
 ) where
     K: Resource + Clone + DeserializeOwned + std::fmt::Debug + Send + Sync + 'static,
 {
@@ -1128,7 +1227,7 @@ fn spawn_watch<K>(
             tokio::select! {
                 _ = cancel.cancelled() => break,
                 _ = tokio::time::sleep_until(deadline), if dirty => {
-                    publish(&events, &target, &rows);
+                    publish(&events, &context, &target, &rows);
                     dirty = false;
                 }
                 item = rx.recv() => {
@@ -1137,7 +1236,7 @@ fn spawn_watch<K>(
                         Ok(WatchEvent::Init) => rows.clear(),
                         Ok(WatchEvent::InitApply(object)) => rows.push(to_row(&object)),
                         Ok(WatchEvent::InitDone) => {
-                            publish(&events, &target, &rows);
+                            publish(&events, &context, &target, &rows);
                             dirty = false;
                         }
                         Ok(WatchEvent::Apply(object)) => {
@@ -1171,6 +1270,7 @@ fn spawn_watch<K>(
 }
 
 fn spawn_metrics<F>(
+    context: String,
     kind: ResourceKind,
     cancel: CancellationToken,
     events: std::sync::mpsc::Sender<AppEvent>,
@@ -1187,14 +1287,22 @@ fn spawn_metrics<F>(
             }
             match fetch().await {
                 Ok(samples) => {
-                    let _ = events.send(AppEvent::Usage { kind, samples });
+                    let _ = events.send(AppEvent::Usage {
+                        context: context.clone(),
+                        kind,
+                        samples,
+                    });
                 }
                 Err(err) if metrics_missing(&err) => {
-                    let _ = events.send(AppEvent::MetricsUnavailable { kind, message: err });
+                    let _ = events.send(AppEvent::MetricsUnavailable {
+                        context: context.clone(),
+                        kind,
+                        message: err,
+                    });
                     break;
                 }
                 Err(err) => {
-                    let _ = events.send(AppEvent::Error(format!("metrics: {err}")));
+                    let _ = events.send(AppEvent::Error(format!("metrics {context}: {err}")));
                 }
             }
             tokio::select! {
@@ -1217,12 +1325,14 @@ fn metrics_missing(err: &str) -> bool {
 
 fn publish(
     events: &std::sync::mpsc::Sender<AppEvent>,
+    context: &str,
     target: &WatchTarget,
     rows: &[crate::model::ResourceRow],
 ) {
     let mut rows = rows.to_vec();
     rows.sort_by(|a, b| a.namespace.cmp(&b.namespace).then(a.name.cmp(&b.name)));
     let _ = events.send(AppEvent::Rows {
+        context: context.to_string(),
         target: target.clone(),
         rows,
     });
@@ -2360,7 +2470,7 @@ where
 async fn overview(
     client: &Client,
     context: String,
-    cache: std::sync::Arc<std::sync::Mutex<Option<(String, ArgoTargets)>>>,
+    cache: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, ArgoTargets>>>,
 ) -> Result<ClusterOverview, String> {
     let (nodes, pods, namespaces, events, usage) = tokio::join!(
         list_all(Api::<Node>::all(client.clone())),
@@ -2542,14 +2652,12 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 async fn argo_overview(
     client: &Client,
     context: &str,
-    cache: &std::sync::Mutex<Option<(String, ArgoTargets)>>,
+    cache: &std::sync::Mutex<std::collections::HashMap<String, ArgoTargets>>,
 ) -> Option<ArgoOverview> {
     let cached = cache
         .lock()
         .ok()
-        .and_then(|guard| guard.clone())
-        .filter(|(cached_context, _)| cached_context == context)
-        .map(|(_, targets)| targets);
+        .and_then(|guard| guard.get(context).cloned());
     let targets = if let Some(targets) = cached {
         targets
     } else {
@@ -2563,7 +2671,7 @@ async fn argo_overview(
             set: find_argo_kind(&discovery, "ApplicationSet"),
         };
         if let Ok(mut guard) = cache.lock() {
-            *guard = Some((context.to_string(), targets.clone()));
+            guard.insert(context.to_string(), targets.clone());
         }
         targets
     };
@@ -3638,6 +3746,7 @@ fn yaml_documents(raw: &str) -> Vec<String> {
 
 async fn load_detail(
     client: Client,
+    context: String,
     target: WatchTarget,
     namespace: String,
     name: String,
@@ -3666,11 +3775,12 @@ async fn load_detail(
     match loaded {
         Ok((yaml, entries)) => {
             let _ = events.send(AppEvent::Yaml {
+                context: context.clone(),
                 uid: uid.clone(),
                 yaml,
             });
             if let Some(entries) = entries {
-                let _ = events.send(AppEvent::ObjectData { uid, entries });
+                let _ = events.send(AppEvent::ObjectData { context, uid, entries });
             }
         }
         Err(err) => {
@@ -4867,5 +4977,72 @@ mod container_tests {
             pod_containers(&terminated, &empty_maps, &empty_secrets, false)[0].state,
             "Terminated: Error (exit 1)"
         );
+    }
+}
+
+/// One window can hold several clusters at once, so the engine keeps its state
+/// per context: watches, catalogs, namespaces and defaults never mix.
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+
+    fn engine() -> (Engine, std::sync::mpsc::Receiver<AppEvent>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        (Engine::new(tx), rx)
+    }
+
+    #[tokio::test]
+    async fn keeps_a_namespace_per_context() {
+        let (mut engine, _rx) = engine();
+        engine
+            .handle(Command::SetNamespace {
+                context: "dev".into(),
+                namespace: Some("team-a".into()),
+            })
+            .await;
+        engine
+            .handle(Command::SetNamespace {
+                context: "prod".into(),
+                namespace: Some("team-b".into()),
+            })
+            .await;
+        assert_eq!(
+            engine.namespaces.get("dev").cloned().flatten(),
+            Some("team-a".to_string())
+        );
+        assert_eq!(
+            engine.namespaces.get("prod").cloned().flatten(),
+            Some("team-b".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn names_the_cluster_it_cannot_reach() {
+        let (mut engine, rx) = engine();
+        engine
+            .handle(Command::Watch {
+                context: "gone".into(),
+                target: WatchTarget::Kind(ResourceKind::Pods),
+            })
+            .await;
+        match rx.try_recv().expect("an error event") {
+            AppEvent::Error(message) => assert!(message.contains("gone"), "{message}"),
+            other => panic!("unexpected event {other:?}"),
+        }
+        // Nothing was watched, and no client was invented for the context.
+        assert!(engine.watches.is_empty());
+        assert!(engine.clients.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stopping_one_watch_leaves_the_others() {
+        let (mut engine, _rx) = engine();
+        let dev = CancellationToken::new();
+        let prod = CancellationToken::new();
+        engine.watches.insert("dev".into(), dev.clone());
+        engine.watches.insert("prod".into(), prod.clone());
+        engine.handle(Command::StopWatch { context: "dev".into() }).await;
+        assert!(dev.is_cancelled());
+        assert!(!prod.is_cancelled());
     }
 }

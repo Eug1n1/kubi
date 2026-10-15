@@ -517,6 +517,28 @@ h1 { font-size: 18px; font-weight: 600; margin: 0; }
 .tab button.drag:active, .log-tab button.drag:active { cursor: grabbing; }
 .tab .x { padding: 0 4px; color: var(--dim); border-radius: var(--r-sm); }
 .tab .x:hover { color: var(--fg); background: var(--hover); }
+/* Cluster badge on a tab, shown once tabs of several clusters are open. */
+.tab .tab-cluster {
+  max-width: 84px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--field);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.tab.active .tab-cluster { background: var(--selected); color: var(--fg); }
+/* A dot on the rail for contexts that have tabs open in this window. */
+.ctx-open {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
 .tab-ghost {
   position: fixed;
   z-index: 80;
