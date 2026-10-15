@@ -660,7 +660,7 @@ export function ContextMenuBody({ kubi, name }: { kubi: Kubi; name: string }) {
       </button>
       <div className="menu-sep" />
       <div className="menu-label">
-        <DotsIcon /> Colour
+        <DotsIcon /> Color
       </div>
       <div className="swatches">
         {CLUSTER_COLORS.map((color) => (
@@ -669,14 +669,14 @@ export function ContextMenuBody({ kubi, name }: { kubi: Kubi; name: string }) {
             className={color === picked ? "swatch on" : "swatch"}
             style={{ background: color }}
             title={color}
-            aria-label={`Colour ${color}`}
+            aria-label={`Color ${color}`}
             aria-pressed={color === picked}
             onClick={() => kubi.setClusterColor(name, color)}
           />
         ))}
         <button
           className={picked == null ? "swatch auto on" : "swatch auto"}
-          title="Use the colour of the name"
+          title="Use the color of the name"
           aria-pressed={picked == null}
           onClick={() => kubi.setClusterColor(name, null)}
         >
@@ -732,7 +732,7 @@ function PowerIcon() {
   );
 }
 
-/** Colour: three dots, which is what a palette reads as at this size. */
+/** Color: three dots, which is what a palette reads as at this size. */
 function DotsIcon() {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">

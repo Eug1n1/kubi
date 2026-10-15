@@ -5,13 +5,13 @@ import { DEFAULT_THEME, parseTheme, type Theme } from "./theme";
 export type Prefs = {
   keymap: Keymap;
   theme: Theme;
-  /** Context colours picked by hand, by context name. */
+  /** Context colors picked by hand, by context name. */
   colors: Record<string, string>;
 };
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
-/** Keeps only well-formed colours, so a hand-edited file cannot break the UI. */
+/** Keeps only well-formed colors, so a hand-edited file cannot break the UI. */
 function parseColors(input: unknown): Record<string, string> {
   if (input == null || typeof input !== "object") return {};
   const out: Record<string, string> = {};

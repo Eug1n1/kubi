@@ -549,8 +549,8 @@ export function ResourceScreen({ kubi }: { kubi: Kubi }) {
                 kubi.focusTab(index);
               }}
             >
-              {/* The rail marks a context with a coloured strip; a tab carries
-                  the same colour, so its cluster is readable at a glance. */}
+              {/* The rail marks a context with a colored strip; a tab carries
+                  the same color, so its cluster is readable at a glance. */}
               <i className="tab-context" style={{ background: clusterColor(item.context) }} />
               {viewTitle(item.view)}
               {/* The name only earns its place once tabs of several clusters are open. */}

@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 
-/** One coloured piece of a line. `cls` is the class that carries its colour. */
+/** One colored piece of a line. `cls` is the class that carries its color. */
 type Token = { text: string; cls: string };
 
 /** One search hit, as offsets into the document. */
@@ -14,7 +14,7 @@ const FLAG = /^(?:true|false|yes|no|on|off|null|~)$/i;
 const LIST_ITEM = /^-(?:\s|$)/;
 const KEY = /^(?:"[^"]*"|'[^']*'|[^:#\s][^:#]*?)(?=\s*:(?:\s|$))/;
 
-/** Colours the scalar that follows a key or a list marker: quoted strings, block
+/** Colors the scalar that follows a key or a list marker: quoted strings, block
  * markers, anchors, tags, numbers and flags, with a trailing comment split off. */
 function scalar(text: string, out: Token[]): void {
   const lead = /^\s*/.exec(text)?.[0] ?? "";
@@ -58,8 +58,8 @@ function scalar(text: string, out: Token[]): void {
   if (comment) out.push({ text: rest.slice(comment.index), cls: "cm" });
 }
 
-/** One line as coloured pieces. Line based on purpose: a quote left open on a
- * line must not recolour everything after it. */
+/** One line as colored pieces. Line based on purpose: a quote left open on a
+ * line must not recolor everything after it. */
 function tokens(line: string): Token[] {
   const out: Token[] = [];
   const indent = /^\s*/.exec(line)?.[0] ?? "";
@@ -159,7 +159,7 @@ function findHits(value: string, expression: RegExp | null): Hit[] {
 }
 
 /** Paints one line, cutting its tokens at the hit boundaries so a match can be
- * marked inside a coloured piece. */
+ * marked inside a colored piece. */
 function paint(line: string, offset: number, hits: Hit[], active: Hit | null): ReactNode[] {
   const out: ReactNode[] = [];
   let key = 0;
@@ -192,8 +192,8 @@ function paint(line: string, offset: number, hits: Hit[], active: Hit | null): R
   return out;
 }
 
-/** YAML document editor: a line-number gutter, syntax colouring and a Ctrl+F
- * find bar around a plain textarea. The colouring is painted in a <pre> behind a
+/** YAML document editor: a line-number gutter, syntax coloring and a Ctrl+F
+ * find bar around a plain textarea. The coloring is painted in a <pre> behind a
  * transparent textarea, which keeps the document editable — and the bundle
  * small — without pulling in an editor library. */
 export function YamlEditor({ value, onChange }: { value: string; onChange: (next: string) => void }) {

@@ -1,8 +1,8 @@
 /* ==========================================================================
    Kubi — visual language
 
-   Every colour is a custom property, written at runtime by src/theme.ts from
-   the user's base colour (Settings → Colors). The block below mirrors the
+   Every color is a custom property, written at runtime by src/theme.ts from
+   the user's base color (Settings → Colors). The block below mirrors the
    default theme so the UI renders correctly before scripts run.
    Dense dashboard scale: mono for data, sans for chrome, visible focus.
    ========================================================================== */
@@ -532,7 +532,7 @@ h1 { font-size: 18px; font-weight: 600; margin: 0; }
 .tab:hover, .tab.active:hover { color: var(--fg); background: var(--hover); }
 /* The pressed state is carried by the strip the same way: the global
    `button:active` would light the label button alone and leave the rest of
-   the tab — the close button spot included — in the hover colour. */
+   the tab — the close button spot included — in the hover color. */
 .tab:active, .tab.active:active { background: var(--selected); }
 .tab.active { color: var(--fg); border-bottom-color: var(--accent); background: var(--bg); }
 .tab.shift, .log-tab.shift { transition: transform 160ms ease, background var(--t-fast), color var(--t-fast), border-color var(--t-fast); }
@@ -547,7 +547,7 @@ h1 { font-size: 18px; font-weight: 600; margin: 0; }
 .tab button.drag:active, .log-tab button.drag:active { cursor: grabbing; }
 .tab .x { padding: 0 4px; color: var(--dim); border-radius: var(--r-sm); }
 .tab .x:hover { color: var(--fg); }
-/* Context colour on a tab: the same strip the rail draws next to the context. */
+/* Context color on a tab: the same strip the rail draws next to the context. */
 .tab .tab-context {
   display: inline-block;
   width: 3px;
@@ -723,7 +723,7 @@ h1 { font-size: 18px; font-weight: 600; margin: 0; }
   border-radius: 50%;
 }
 .menu .swatch:hover { transform: scale(1.12); }
-/* The picked one keeps a ring in the foreground colour, whatever its hue is. */
+/* The picked one keeps a ring in the foreground color, whatever its hue is. */
 .menu .swatch.on {
   border-color: var(--fg);
   box-shadow: inset 0 0 0 2px var(--bg-panel);
@@ -895,7 +895,7 @@ th.num, td.num {
    squeezing tables and values into unreadable columns. */
 .detail .body > * { min-width: var(--detail-content); }
 
-/* YAML tab: the editor fills the panel; the gutter, the colouring and the find
+/* YAML tab: the editor fills the panel; the gutter, the coloring and the find
    bar are painted around a plain textarea, which stays the editing surface. */
 .yaml-tab { display: flex; flex-direction: column; height: 100%; }
 .yaml-tab .row { flex: none; display: flex; align-items: center; gap: var(--sp1); margin-top: var(--sp2); }
@@ -1019,7 +1019,7 @@ th.num, td.num {
 }
 .yaml-editor .sheet textarea::selection { background: var(--selection); }
 
-/* YAML colours. */
+/* YAML colors. */
 .yaml-editor .ky { color: var(--accent-text); }
 .yaml-editor .st { color: var(--ok); }
 .yaml-editor .nm { color: var(--warn); }
@@ -1565,7 +1565,7 @@ th.num, td.num {
   text-transform: uppercase;
   color: var(--muted);
 }
-/* Colour controls in Settings. */
+/* Color controls in Settings. */
 .theme-mode {
   display: inline-flex;
   gap: 2px;

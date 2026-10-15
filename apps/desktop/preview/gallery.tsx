@@ -286,7 +286,7 @@ const page = (title: string, body: string, extra = "") => `<!doctype html>
 <html><head><meta charset="utf-8"><title>${title}</title>
 <style>${css}
 /* Harness chrome only — never shipped. */
-/* Page chrome only: never override the app's own body colours. */
+/* Page chrome only: never override the app's own body colors. */
 body { margin: 0; background: #101114; font: 13px/1.5 ui-sans-serif, system-ui, sans-serif; }
 .pv-page { padding: 20px; }
 .pv h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #8f97a6; }

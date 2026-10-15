@@ -1,5 +1,5 @@
 /**
- * Theming: one base colour drives every surface, accent and status colours stay
+ * Theming: one base color drives every surface, accent and status colors stay
  * explicit. Tokens are emitted as CSS custom properties, so the whole UI
  * re-themes live. Nothing here touches the DOM by itself.
  */
@@ -7,7 +7,7 @@
 export type ThemeMode = "dark" | "light";
 
 export type Theme = {
-  /** Canvas colour; every surface is derived from it. */
+  /** Canvas color; every surface is derived from it. */
   base: string;
   mode: ThemeMode;
   accent: string;
@@ -170,7 +170,7 @@ export function applyTheme(theme: Theme, root?: HTMLElement): void {
   target.style.colorScheme = theme.mode;
 }
 
-function colour(input: unknown, fallback: string): string {
+function color(input: unknown, fallback: string): string {
   return typeof input === "string" && parseHex(input) != null ? input : fallback;
 }
 
@@ -179,12 +179,12 @@ export function parseTheme(input: unknown): Theme {
   if (input == null || typeof input !== "object") return DEFAULT_THEME;
   const raw = input as Partial<Record<keyof Theme, unknown>>;
   return {
-    base: colour(raw.base, DEFAULT_THEME.base),
+    base: color(raw.base, DEFAULT_THEME.base),
     mode: raw.mode === "light" ? "light" : "dark",
-    accent: colour(raw.accent, DEFAULT_THEME.accent),
-    ok: colour(raw.ok, DEFAULT_THEME.ok),
-    warn: colour(raw.warn, DEFAULT_THEME.warn),
-    bad: colour(raw.bad, DEFAULT_THEME.bad),
+    accent: color(raw.accent, DEFAULT_THEME.accent),
+    ok: color(raw.ok, DEFAULT_THEME.ok),
+    warn: color(raw.warn, DEFAULT_THEME.warn),
+    bad: color(raw.bad, DEFAULT_THEME.bad),
   };
 }
 

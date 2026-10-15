@@ -29,7 +29,7 @@ end renders what it sends back. It runs on macOS, Windows and Linux.
   from, and the volumes each container mounts.
 - Sources: the ConfigMaps and Secrets a pod refers to, with their keys resolved
   and secret values revealed one at a time.
-- The manifest opens in an editor with line numbers, YAML colouring and a find
+- The manifest opens in an editor with line numbers, YAML coloring and a find
   bar (`Ctrl`/`Cmd` + `F`) that takes regular expressions and can replace, and
   the edited document can be patched straight back into the cluster.
 - Metrics for pods and nodes, with CPU and memory history.
@@ -42,7 +42,7 @@ end renders what it sends back. It runs on macOS, Windows and Linux.
 
 **Make it yours**
 
-- Settings with rebindable shortcuts and a theme derived from one base colour,
+- Settings with rebindable shortcuts and a theme derived from one base color,
   with light and dark modes; contrast for accents and filled buttons is computed
   rather than eyeballed.
 
@@ -145,8 +145,8 @@ under the version when tagging.
   round trip. Masking is a UI concern, not a boundary.
 - The Containers and Sources tabs resolve the objects a **pod** refers to; other
   workloads show their spec in the manifest tab.
-- YAML colouring is line based rather than a full YAML parser, so flow
-  collections and block scalars are coloured as plain values.
+- YAML coloring is line based rather than a full YAML parser, so flow
+  collections and block scalars are colored as plain values.
 - Installers are configured per platform in `tauri.conf.json` and its
   `tauri.windows.conf.json` / `tauri.linux.conf.json` companions. Windows builds
   are unsigned, so SmartScreen will warn about them; macOS builds are unsigned

@@ -31,7 +31,7 @@ shipped as.
   comes from, and the volumes each container mounts.
 - Sources of a pod: the ConfigMaps and Secrets it refers to, with their keys
   resolved and every secret value revealed on demand.
-- A YAML editor for the manifest with line numbers, colouring, a find bar that
+- A YAML editor for the manifest with line numbers, coloring, a find bar that
   takes regular expressions, replace and Tab indentation, and patching the
   edited document back into the cluster.
 - Logs per pod and container: follow, the previous container, timestamps and a
@@ -43,8 +43,8 @@ shipped as.
   object overview and an Events tab.
 - A context rail with folders, drag-to-reorder and collapsing, stored next to
   the app's settings.
-- Settings with rebindable shortcuts and a theme derived from one base colour:
-  light and dark modes, accent and status colours, computed contrast, and a
+- Settings with rebindable shortcuts and a theme derived from one base color:
+  light and dark modes, accent and status colors, computed contrast, and a
   terminal palette that follows.
 - A visual harness (`make preview`) that renders the real components with fake
   data into pages any headless browser can screenshot.
@@ -54,11 +54,11 @@ shipped as.
 - Several clusters at once: tabs are bound to a cluster, so one window can hold
   tabs of different clusters and keep their watches, log streams, port forwards
   and shells running while you move between them. Every command names the
-  context it works on, a tab is marked with its cluster's colour and name, and
+  context it works on, a tab is marked with its cluster's color and name, and
   the rail shows which contexts have tabs open.
 - A right-click menu on a context: disconnect the cluster (its tabs close and
-  its streams stop, every other cluster keeps running) and pick the colour that
-  marks it, from a palette or back to the hue of its name. Picked colours are
+  its streams stop, every other cluster keeps running) and pick the color that
+  marks it, from a palette or back to the hue of its name. Picked colors are
   remembered in the app's settings.
 
 ### Changed

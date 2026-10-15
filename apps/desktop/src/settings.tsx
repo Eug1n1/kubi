@@ -146,7 +146,7 @@ function Keybindings({
   );
 }
 
-/** One colour with a swatch picker and an editable hex field. */
+/** One color with a swatch picker and an editable hex field. */
 function ColorField({
   label,
   hint,
@@ -202,7 +202,7 @@ export function Colors({ kubi }: { kubi: Kubi }) {
   return (
     <>
       <p className="muted">
-        Surfaces are derived from the base colour; the accent and status colours are used as given.
+        Surfaces are derived from the base color; the accent and status colors are used as given.
         Changes apply immediately.
       </p>
       <div className="theme-mode" role="group" aria-label="Theme mode">
@@ -248,7 +248,7 @@ export function Colors({ kubi }: { kubi: Kubi }) {
       <ColorField label="Failure" hint="errors and destructive actions" value={theme.bad} onChange={(bad) => kubi.updateTheme({ bad })} />
       <div className="binding-footer">
         <button className="ghost" onClick={kubi.resetTheme}>
-          Reset colours
+          Reset colors
         </button>
       </div>
     </>

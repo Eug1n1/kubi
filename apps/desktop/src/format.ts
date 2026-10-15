@@ -82,10 +82,10 @@ export const CLUSTER_COLORS = [
 ];
 
 /**
- * Colours the user picked for a context, by context name. Kept in a module
+ * Colors the user picked for a context, by context name. Kept in a module
  * variable because `clusterColor` is called from plain helpers as well as from
  * components; the window mirrors the same map in its state, so a change
- * re-renders everything that shows a colour.
+ * re-renders everything that shows a color.
  */
 let chosen: Record<string, string> = {};
 
@@ -93,7 +93,7 @@ export function setClusterColors(next: Record<string, string>): void {
   chosen = next;
 }
 
-/** The context colour: the one the user picked, or the hue of its name. */
+/** The context color: the one the user picked, or the hue of its name. */
 export function clusterColor(name: string): string {
   const picked = chosen[name];
   if (picked) return picked;

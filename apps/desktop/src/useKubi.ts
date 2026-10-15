@@ -227,7 +227,7 @@ export function useKubi() {
   });
   const [menu, setMenu] = useState<RowMenu | null>(null);
   const [ctxMenu, setCtxMenu] = useState<ContextMenu | null>(null);
-  /** Context colours picked by hand; empty means "hue of the name". */
+  /** Context colors picked by hand; empty means "hue of the name". */
   const [colors, setColors] = useState<Record<string, string>>({});
   /** Contexts this window holds a connection to, so the menu can say so. */
   const [connected, setConnected] = useState<string[]>([]);
@@ -1481,7 +1481,7 @@ export function useKubi() {
         setKeymap(prefs.keymap);
         setTheme(prefs.theme);
         setColors(prefs.colors);
-        // Every strip and badge reads the colour through this map, so it has to
+        // Every strip and badge reads the color through this map, so it has to
         // be in place before the first render that shows one.
         setClusterColors(prefs.colors);
       })
@@ -1719,7 +1719,7 @@ export function useKubi() {
     ctxMenu,
     /** Contexts this window holds a connection to, in the order they connected. */
     connectedContexts: connected,
-    /** Context colours picked by hand, keyed by context name. */
+    /** Context colors picked by hand, keyed by context name. */
     clusterColors: colors,
     openContextMenu: (x: number, y: number, name: string) => {
       setMenu(null);
@@ -1731,7 +1731,7 @@ export function useKubi() {
       setCtxMenu(null);
       void send({ disconnect: { context: name } });
     },
-    /** Picks a colour for a context, or `null` to go back to the hue of its name. */
+    /** Picks a color for a context, or `null` to go back to the hue of its name. */
     setClusterColor: (name: string, color: string | null) => {
       const next = { ...colors };
       if (color == null) delete next[name];
