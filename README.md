@@ -96,6 +96,10 @@ The core owns everything that touches the cluster. The UI sends commands
 events that come back, so the window never blocks on the API server and a watch
 keeps a list current on its own.
 
+Working on the code? [`AGENTS.md`](AGENTS.md) covers the conventions, the
+invariants worth not breaking and how to check a change — including the parts
+the visual harness cannot show.
+
 ## Where state lives
 
 UI state is written next to the kubeconfig's neighbours in the app config
