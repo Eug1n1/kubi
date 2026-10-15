@@ -138,3 +138,12 @@ under the version when tagging.
   collections and block scalars are coloured as plain values.
 - Only macOS bundles are configured today.
 
+## License
+
+Apache License 2.0 — see [`LICENSE`](LICENSE). Copyright 2026 Kubi
+contributors.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this project, as defined in the Apache-2.0 license, shall be
+licensed as above, without any additional terms or conditions.
+

@@ -3,6 +3,7 @@ name = "kubi-desktop"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 description = "Kubi desktop shell"
 
 [build-dependencies]
