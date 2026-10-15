@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -11,10 +11,12 @@ use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet}
 use k8s_openapi::api::autoscaling::v2::HorizontalPodAutoscaler;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
 use k8s_openapi::api::core::v1::{
-    ConfigMap, Endpoints, Event, LimitRange, Namespace, Node, PersistentVolume,
-    PersistentVolumeClaim, Pod, ResourceQuota, Secret, Service, ServiceAccount,
+    ConfigMap, Container, ContainerStatus, Endpoints, Event, KeyToPath, LimitRange, Namespace, Node,
+    PersistentVolume, PersistentVolumeClaim, Pod, ResourceQuota, Secret, Service,
+    ServiceAccount, Volume,
 };
 use k8s_openapi::api::discovery::v1::EndpointSlice;
+use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::api::networking::v1::{Ingress, IngressClass, NetworkPolicy};
 use k8s_openapi::api::policy::v1::PodDisruptionBudget;
 use k8s_openapi::api::rbac::v1::{ClusterRole, ClusterRoleBinding, Role, RoleBinding};
@@ -37,8 +39,9 @@ use tokio_util::sync::CancellationToken;
 use crate::kubeconfig::{contexts_from, load_kubeconfig, namespace_of};
 use crate::model::{
     AppEvent, ArgoApp, ArgoAppSet, ArgoCluster, ArgoOverview, ArgoRepo, ClusterOverview, Command,
-    CrTarget, DataEntry, EventInfo, ObjectWarning, OverviewWarning, ResourceKind, UsageSample,
-    WatchTarget,
+    CrTarget, DataEntry, EventInfo, ObjectWarning, OverviewWarning, PodContainer, PodEnv, PodMount,
+    PodValue,
+    ResourceKind, UsageSample, WatchTarget,
 };
 use crate::quantity::{parse_bytes, parse_cpu_millis};
 use crate::rows::{
@@ -238,6 +241,18 @@ impl Engine {
                 uid,
             } => self.spawn_events(namespace, name, uid),
             Command::FetchWarnings { namespace } => self.spawn_warnings(namespace),
+            Command::FetchPodSources {
+                namespace,
+                name,
+                uid,
+                reveal,
+            } => self.spawn_pod_sources(namespace, name, uid, reveal),
+            Command::FetchPodContainers {
+                namespace,
+                name,
+                uid,
+                reveal,
+            } => self.spawn_pod_containers(namespace, name, uid, reveal),
             Command::RefreshCatalog => self.start_catalog(),
             Command::Delete {
                 target,
@@ -965,6 +980,46 @@ impl Engine {
                 }
                 Err(err) => {
                     let _ = events.send(AppEvent::Error(format!("events {name}: {err}")));
+                }
+            }
+        });
+    }
+
+    /// Reads the ConfigMaps and Secrets a pod refers to, so the panel can show
+    /// resolved mounts and environment values.
+    fn spawn_pod_sources(&self, namespace: String, name: String, uid: String, reveal: bool) {
+        let Some(client) = self.current_client() else {
+            self.emit_error("Not connected to a cluster");
+            return;
+        };
+        let events = self.events.clone();
+        tokio::spawn(async move {
+            match load_pod_sources(&client, &namespace, &name, reveal).await {
+                Ok((mounts, env)) => {
+                    let _ = events.send(AppEvent::PodSources { uid, mounts, env });
+                }
+                Err(err) => {
+                    let _ = events.send(AppEvent::Error(format!("sources {name}: {err}")));
+                }
+            }
+        });
+    }
+
+    /// Spec and live status of every container of a pod, for the Containers
+    /// block of the object panel.
+    fn spawn_pod_containers(&self, namespace: String, name: String, uid: String, reveal: bool) {
+        let Some(client) = self.current_client() else {
+            self.emit_error("Not connected to a cluster");
+            return;
+        };
+        let events = self.events.clone();
+        tokio::spawn(async move {
+            match load_pod_containers(&client, &namespace, &name, reveal).await {
+                Ok(containers) => {
+                    let _ = events.send(AppEvent::PodContainers { uid, containers });
+                }
+                Err(err) => {
+                    let _ = events.send(AppEvent::Error(format!("containers {name}: {err}")));
                 }
             }
         });
@@ -2812,6 +2867,648 @@ fn secret_entries(item: &Secret, reveal: bool) -> Vec<DataEntry> {
     entries
 }
 
+/// What backs a volume, for the label and for resolving its keys.
+enum Backing<'a> {
+    ConfigMap(&'a str),
+    Secret(&'a str),
+}
+
+fn volume_backing(volume: &Volume) -> Vec<Backing<'_>> {
+    let mut backings = Vec::new();
+    if let Some(map) = &volume.config_map {
+        backings.push(Backing::ConfigMap(&map.name));
+    }
+    if let Some(secret) = &volume.secret {
+        if let Some(name) = &secret.secret_name {
+            backings.push(Backing::Secret(name));
+        }
+    }
+    if let Some(projected) = &volume.projected {
+        for source in projected.sources.iter().flatten() {
+            if let Some(map) = &source.config_map {
+                backings.push(Backing::ConfigMap(&map.name));
+            }
+            if let Some(secret) = &source.secret {
+                backings.push(Backing::Secret(&secret.name));
+            }
+        }
+    }
+    backings
+}
+
+fn volume_label(volume: &Volume) -> String {
+    if let Some(map) = &volume.config_map {
+        return format!("configMap {}", map.name);
+    }
+    if let Some(secret) = &volume.secret {
+        return format!("secret {}", secret.secret_name.clone().unwrap_or_default());
+    }
+    if let Some(claim) = &volume.persistent_volume_claim {
+        return format!("persistentVolumeClaim {}", claim.claim_name);
+    }
+    if volume.empty_dir.is_some() {
+        return "emptyDir".to_string();
+    }
+    if volume.host_path.is_some() {
+        return "hostPath".to_string();
+    }
+    if volume.projected.is_some() {
+        return "projected".to_string();
+    }
+    if volume.downward_api.is_some() {
+        return "downwardAPI".to_string();
+    }
+    if volume.nfs.is_some() {
+        return "nfs".to_string();
+    }
+    if volume.csi.is_some() {
+        return "csi".to_string();
+    }
+    if volume.config_map.is_none() && volume.secret.is_none() {
+        return "volume".to_string();
+    }
+    "volume".to_string()
+}
+
+/// The volume keys this pod actually sees, honouring `items` when present.
+fn mount_values(
+    volume: &Volume,
+    config_maps: &BTreeMap<String, ConfigMap>,
+    secrets: &BTreeMap<String, Secret>,
+    reveal: bool,
+) -> (Vec<PodValue>, Option<String>) {
+    let mut values = Vec::new();
+    let mut notes = Vec::new();
+    match &volume.config_map {
+        Some(map) => {
+            let keys = item_keys(map.items.as_deref());
+            collect_config_map(config_maps.get(&map.name), &map.name, keys.as_deref(), &mut values, &mut notes);
+        }
+        None => {}
+    }
+    if let Some(secret) = &volume.secret {
+        let name = secret.secret_name.clone().unwrap_or_default();
+        let keys = item_keys(secret.items.as_deref());
+        collect_secret(secrets.get(&name), &name, keys.as_deref(), reveal, &mut values, &mut notes);
+    }
+    if let Some(projected) = &volume.projected {
+        for source in projected.sources.iter().flatten() {
+            if let Some(map) = &source.config_map {
+                let keys = item_keys(map.items.as_deref());
+                collect_config_map(config_maps.get(&map.name), &map.name, keys.as_deref(), &mut values, &mut notes);
+            }
+            if let Some(secret) = &source.secret {
+                let name = secret.name.clone();
+                let keys = item_keys(secret.items.as_deref());
+                collect_secret(secrets.get(&name), &name, keys.as_deref(), reveal, &mut values, &mut notes);
+            }
+        }
+    }
+    let note = if notes.is_empty() { None } else { Some(notes.join("; ")) };
+    (values, note)
+}
+
+fn item_keys(items: Option<&[KeyToPath]>) -> Option<Vec<String>> {
+    items.map(|list| list.iter().map(|item| item.key.clone()).collect())
+}
+
+fn collect_config_map(
+    map: Option<&ConfigMap>,
+    name: &str,
+    keys: Option<&[String]>,
+    values: &mut Vec<PodValue>,
+    notes: &mut Vec<String>,
+) {
+    let Some(map) = map else {
+        notes.push(format!("ConfigMap {name} not found or not readable"));
+        return;
+    };
+    for (key, value) in config_entries(map) {
+        if keys.is_some_and(|wanted| !wanted.contains(&key)) {
+            continue;
+        }
+        values.push(PodValue {
+            key,
+            value,
+            masked: false,
+            binary: false,
+        });
+    }
+}
+
+fn collect_secret(
+    secret: Option<&Secret>,
+    name: &str,
+    keys: Option<&[String]>,
+    reveal: bool,
+    values: &mut Vec<PodValue>,
+    notes: &mut Vec<String>,
+) {
+    let Some(secret) = secret else {
+        notes.push(format!("Secret {name} not found or not readable"));
+        return;
+    };
+    for (key, (value, binary)) in secret_pairs(secret) {
+        if keys.is_some_and(|wanted| !wanted.contains(&key)) {
+            continue;
+        }
+        values.push(PodValue {
+            key,
+            value,
+            masked: !reveal,
+            binary,
+        });
+    }
+}
+
+fn config_entries(map: &ConfigMap) -> Vec<(String, String)> {
+    let mut entries: Vec<(String, String)> = map
+        .data
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    if let Some(binary) = &map.binary_data {
+        for (key, bytes) in binary {
+            entries.push((key.clone(), base64_encode(&bytes.0)));
+        }
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
+
+/// Every key of a Secret with its real value and whether it is binary. The
+/// caller marks secret keys with `masked`, so the UI decides what to hide and
+/// one value can be revealed without fetching the Secret again.
+fn secret_pairs(secret: &Secret) -> Vec<(String, (String, bool))> {
+    let mut entries: Vec<(String, (String, bool))> = secret
+        .data
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(key, bytes)| {
+            let (text, binary) = secret_text(&bytes.0);
+            (key, (text, binary))
+        })
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
+
+fn env_container_names(pod: &Pod) -> Vec<(String, Container)> {
+    let Some(spec) = &pod.spec else {
+        return Vec::new();
+    };
+    let mut containers: Vec<(String, Container)> = spec
+        .containers
+        .iter()
+        .map(|item| (item.name.clone(), item.clone()))
+        .collect();
+    if let Some(init) = &spec.init_containers {
+        for item in init {
+            containers.push((item.name.clone(), item.clone()));
+        }
+    }
+    containers
+}
+
+/// Resolves the pod's own fields that `fieldRef` can point at.
+fn field_value(pod: &Pod, path: &str) -> Option<String> {
+    let meta = &pod.metadata;
+    let status = pod.status.as_ref();
+    let spec = pod.spec.as_ref();
+    Some(match path {
+        "metadata.name" => meta.name.clone()?,
+        "metadata.namespace" => meta.namespace.clone()?,
+        "metadata.uid" => meta.uid.clone()?,
+        "metadata.labels" => {
+            let labels = meta.labels.clone().unwrap_or_default();
+            labels
+                .iter()
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        }
+        "spec.nodeName" => spec.and_then(|spec| spec.node_name.clone())?,
+        "spec.serviceAccountName" => spec.and_then(|spec| spec.service_account_name.clone())?,
+        "status.podIP" => status.and_then(|status| status.pod_ip.clone())?,
+        "status.hostIP" => status.and_then(|status| status.host_ip.clone())?,
+        _ => return None,
+    })
+}
+
+/// A `resourceFieldRef`: the container's own request or limit for that resource.
+fn resource_value(container: &Container, resource: &str) -> Option<String> {
+    let resources = container.resources.as_ref();
+    let (scope, name) = match resource.split_once('.') {
+        Some((scope, name)) => (scope, name),
+        None => ("limits", resource),
+    };
+    let quantities = match scope {
+        "limits" => resources.and_then(|item| item.limits.as_ref()),
+        _ => resources.and_then(|item| item.requests.as_ref()),
+    };
+    let quantity = quantities.and_then(|map| map.get(name))?;
+    Some(quantity.0.clone())
+}
+
+/// Volumes, mounts and environment of a pod, with ConfigMap and Secret values
+/// resolved. Secret values carry `masked` while `reveal` is off, so the UI can
+/// hide them and still reveal one value at a time. Pure, so the whole mapping is
+/// testable without a cluster.
+fn pod_sources(
+    pod: &Pod,
+    config_maps: &BTreeMap<String, ConfigMap>,
+    secrets: &BTreeMap<String, Secret>,
+    reveal: bool,
+) -> (Vec<PodMount>, Vec<PodEnv>) {
+    let volumes: BTreeMap<String, Volume> = pod
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.volumes.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|volume| (volume.name.clone(), volume))
+        .collect();
+
+    let mut mounts = Vec::new();
+    let mut env = Vec::new();
+    for (container, item) in env_container_names(pod) {
+        for mount in item.volume_mounts.iter().flatten() {
+            let volume = volumes.get(&mount.name);
+            let (values, note) = match volume {
+                Some(volume) => mount_values(volume, config_maps, secrets, reveal),
+                None => (Vec::new(), Some(format!("volume {} not found", mount.name))),
+            };
+            mounts.push(PodMount {
+                container: container.clone(),
+                name: mount.name.clone(),
+                path: mount.mount_path.clone(),
+                read_only: mount.read_only.unwrap_or(false),
+                sub_path: mount.sub_path.clone(),
+                source: volume.map(volume_label).unwrap_or_else(|| "missing".to_string()),
+                values,
+                note,
+            });
+        }
+
+        for variable in item.env.iter().flatten() {
+            let mut entry = PodEnv {
+                container: container.clone(),
+                name: variable.name.clone(),
+                origin: "literal".to_string(),
+                key: None,
+                value: variable.value.clone().unwrap_or_default(),
+                masked: false,
+                binary: false,
+                note: None,
+            };
+            if let Some(from) = &variable.value_from {
+                if let Some(reference) = &from.config_map_key_ref {
+                    entry.origin = format!("configMap {}", reference.name);
+                    entry.key = Some(reference.key.clone());
+                    match config_maps.get(&reference.name).and_then(|map| {
+                        config_entries(map)
+                            .into_iter()
+                            .find(|(key, _)| key == &reference.key)
+                    }) {
+                        Some((_, value)) => entry.value = value,
+                        None => {
+                            entry.note = Some(format!(
+                                "key {} missing in ConfigMap {}",
+                                reference.key, reference.name
+                            ))
+                        }
+                    }
+                } else if let Some(reference) = &from.secret_key_ref {
+                    entry.origin = format!("secret {}", reference.name);
+                    entry.key = Some(reference.key.clone());
+                    match secrets.get(&reference.name).and_then(|secret| {
+                        secret_pairs(secret)
+                            .into_iter()
+                            .find(|(key, _)| key == &reference.key)
+                    }) {
+                        Some((_, (value, binary))) => {
+                            entry.value = value;
+                            entry.binary = binary;
+                            entry.masked = !reveal;
+                        }
+                        None => {
+                            entry.note = Some(format!(
+                                "key {} missing in Secret {}",
+                                reference.key, reference.name
+                            ))
+                        }
+                    }
+                } else if let Some(reference) = &from.field_ref {
+                    entry.origin = format!("fieldRef {}", reference.field_path);
+                    match field_value(pod, &reference.field_path) {
+                        Some(value) => entry.value = value,
+                        None => entry.note = Some("field not set on this pod".to_string()),
+                    }
+                } else if let Some(reference) = &from.resource_field_ref {
+                    entry.origin = format!("resourceFieldRef {}", reference.resource);
+                    match resource_value(&item, &reference.resource) {
+                        Some(value) => entry.value = value,
+                        None => entry.note = Some("no request or limit for it".to_string()),
+                    }
+                }
+            }
+            env.push(entry);
+        }
+
+        for from in item.env_from.clone().unwrap_or_default() {
+            let prefix = from.prefix.clone().unwrap_or_default();
+            if let Some(reference) = &from.config_map_ref {
+                let mut pushed = 0;
+                if let Some(map) = config_maps.get(&reference.name) {
+                    for (key, value) in config_entries(map) {
+                        env.push(PodEnv {
+                            container: container.clone(),
+                            name: format!("{prefix}{key}"),
+                            origin: format!("configMap {} (envFrom)", reference.name),
+                            key: Some(key),
+                            value,
+                            masked: false,
+                            binary: false,
+                            note: None,
+                        });
+                        pushed += 1;
+                    }
+                }
+                if pushed == 0 {
+                    env.push(PodEnv {
+                        container: container.clone(),
+                        name: format!("{prefix}<all keys>"),
+                        origin: format!("configMap {} (envFrom)", reference.name),
+                        key: None,
+                        value: String::new(),
+                        masked: false,
+                        binary: false,
+                        note: Some(format!(
+                            "ConfigMap {} not found or not readable",
+                            reference.name
+                        )),
+                    });
+                }
+            }
+            if let Some(reference) = &from.secret_ref {
+                let mut pushed = 0;
+                if let Some(secret) = secrets.get(&reference.name) {
+                    for (key, (value, binary)) in secret_pairs(secret) {
+                        env.push(PodEnv {
+                            container: container.clone(),
+                            name: format!("{prefix}{key}"),
+                            origin: format!("secret {} (envFrom)", reference.name),
+                            key: Some(key),
+                            value,
+                            masked: !reveal,
+                            binary,
+                            note: None,
+                        });
+                        pushed += 1;
+                    }
+                }
+                if pushed == 0 {
+                    env.push(PodEnv {
+                        container: container.clone(),
+                        name: format!("{prefix}<all keys>"),
+                        origin: format!("secret {} (envFrom)", reference.name),
+                        key: None,
+                        value: String::new(),
+                        masked: false,
+                        binary: false,
+                        note: Some(format!(
+                            "Secret {} not found or not readable",
+                            reference.name
+                        )),
+                    });
+                }
+            }
+        }
+    }
+    (mounts, env)
+}
+
+/// Spec facts and live status of every container of a pod, in spec order
+/// (init containers after the regular ones). Env and mounts come resolved from
+/// [`pod_sources`], so secret values arrive with the reveal flag of the request.
+/// Pure, so the whole mapping is testable without a cluster.
+fn pod_containers(
+    pod: &Pod,
+    config_maps: &BTreeMap<String, ConfigMap>,
+    secrets: &BTreeMap<String, Secret>,
+    reveal: bool,
+) -> Vec<PodContainer> {
+    let (mounts, env) = pod_sources(pod, config_maps, secrets, reveal);
+    let spec = pod.spec.as_ref();
+    let statuses: BTreeMap<String, &ContainerStatus> = pod
+        .status
+        .as_ref()
+        .and_then(|status| status.container_statuses.as_deref())
+        .map(|statuses| statuses.iter().map(|item| (item.name.clone(), item)).collect())
+        .unwrap_or_default();
+
+    let regular = spec.map(|spec| spec.containers.as_slice()).unwrap_or(&[]);
+    let init = spec
+        .and_then(|spec| spec.init_containers.as_deref())
+        .unwrap_or(&[]);
+    let mut containers = Vec::new();
+    for (group, is_init) in [(regular, false), (init, true)] {
+        for container in group {
+            let mut info = container_info(container, is_init, &statuses);
+            info.env = env
+                .iter()
+                .filter(|item| item.container == container.name)
+                .cloned()
+                .collect();
+            info.mounts = mounts
+                .iter()
+                .filter(|item| item.container == container.name)
+                .cloned()
+                .collect();
+            containers.push(info);
+        }
+    }
+    containers
+}
+
+fn container_info(
+    container: &Container,
+    init: bool,
+    statuses: &BTreeMap<String, &ContainerStatus>,
+) -> PodContainer {
+    let ports = container
+        .ports
+        .iter()
+        .flatten()
+        .map(|port| {
+            let proto = port.protocol.as_deref().unwrap_or("TCP");
+            let mut label = format!("{}/{}", port.container_port, proto);
+            if let Some(name) = &port.name {
+                label.push(' ');
+                label.push_str(name);
+            }
+            if let Some(host) = port.host_port {
+                label.push_str(&format!(" (host {host})"));
+            }
+            label
+        })
+        .collect();
+
+    let status = statuses.get(&container.name);
+    let state = match status.and_then(|status| status.state.as_ref()) {
+        Some(state) if state.running.is_some() => "Running".to_string(),
+        Some(state) => {
+            if let Some(waiting) = &state.waiting {
+                format!("Waiting: {}", waiting.reason.as_deref().unwrap_or("…"))
+            } else if let Some(terminated) = &state.terminated {
+                let reason = terminated.reason.as_deref().unwrap_or("Unknown");
+                match terminated.exit_code {
+                    0 => format!("Terminated: {reason}"),
+                    code => format!("Terminated: {reason} (exit {code})"),
+                }
+            } else {
+                "Unknown".to_string()
+            }
+        }
+        None => "Pending".to_string(),
+    };
+
+    PodContainer {
+        name: container.name.clone(),
+        image: container.image.clone().unwrap_or_default(),
+        init,
+        ports,
+        state,
+        ready: status.map(|status| status.ready).unwrap_or(false),
+        restarts: status.map(|status| status.restart_count).unwrap_or(0),
+        requests: resources_map(
+            container
+                .resources
+                .as_ref()
+                .and_then(|item| item.requests.as_ref()),
+        ),
+        limits: resources_map(
+            container
+                .resources
+                .as_ref()
+                .and_then(|item| item.limits.as_ref()),
+        ),
+        env: Vec::new(),
+        mounts: Vec::new(),
+    }
+}
+
+/// Resource name to quantity text, keys sorted; empty when nothing is set.
+fn resources_map(map: Option<&BTreeMap<String, Quantity>>) -> BTreeMap<String, String> {
+    map.map(|map| {
+        map.iter()
+            .map(|(key, value)| (key.clone(), value.0.clone()))
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// Names of the ConfigMaps and Secrets a pod refers to, so only those are read.
+fn pod_references(pod: &Pod) -> (BTreeSet<String>, BTreeSet<String>) {
+    let mut config_maps = BTreeSet::new();
+    let mut secrets = BTreeSet::new();
+    let Some(spec) = &pod.spec else {
+        return (config_maps, secrets);
+    };
+    for volume in spec.volumes.iter().flatten() {
+        for backing in volume_backing(volume) {
+            match backing {
+                Backing::ConfigMap(name) => {
+                    config_maps.insert(name.to_string());
+                }
+                Backing::Secret(name) => {
+                    secrets.insert(name.to_string());
+                }
+            }
+        }
+    }
+    for (_, container) in env_container_names(pod) {
+        for variable in container.env.iter().flatten() {
+            if let Some(from) = &variable.value_from {
+                if let Some(reference) = &from.config_map_key_ref {
+                    config_maps.insert(reference.name.clone());
+                }
+                if let Some(reference) = &from.secret_key_ref {
+                    secrets.insert(reference.name.clone());
+                }
+            }
+        }
+        for from in container.env_from.clone().unwrap_or_default() {
+            if let Some(reference) = &from.config_map_ref {
+                config_maps.insert(reference.name.clone());
+            }
+            if let Some(reference) = &from.secret_ref {
+                secrets.insert(reference.name.clone());
+            }
+        }
+    }
+    (config_maps, secrets)
+}
+
+async fn load_pod_sources(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+    reveal: bool,
+) -> Result<(Vec<PodMount>, Vec<PodEnv>), String> {
+    let pod = Api::<Pod>::namespaced(client.clone(), namespace)
+        .get(name)
+        .await
+        .map_err(|err| err.to_string())?;
+    let (config_maps, secrets) = load_referenced(client, namespace, &pod).await;
+    Ok(pod_sources(&pod, &config_maps, &secrets, reveal))
+}
+
+async fn load_pod_containers(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+    reveal: bool,
+) -> Result<Vec<PodContainer>, String> {
+    let pod = Api::<Pod>::namespaced(client.clone(), namespace)
+        .get(name)
+        .await
+        .map_err(|err| err.to_string())?;
+    let (config_maps, secrets) = load_referenced(client, namespace, &pod).await;
+    Ok(pod_containers(&pod, &config_maps, &secrets, reveal))
+}
+
+/// Reads the ConfigMaps and Secrets a pod refers to. Unreadable objects are
+/// skipped, so the panel can report them as notes instead of failing.
+async fn load_referenced(
+    client: &Client,
+    namespace: &str,
+    pod: &Pod,
+) -> (BTreeMap<String, ConfigMap>, BTreeMap<String, Secret>) {
+    let (wanted_maps, wanted_secrets) = pod_references(pod);
+
+    let map_api = Api::<ConfigMap>::namespaced(client.clone(), namespace);
+    let maps = futures::future::join_all(
+        wanted_maps
+            .iter()
+            .map(|item| async { map_api.get(item).await.map(|map| (item.clone(), map)).ok() }),
+    )
+    .await;
+    let config_maps: BTreeMap<String, ConfigMap> = maps.into_iter().flatten().collect();
+
+    let secret_api = Api::<Secret>::namespaced(client.clone(), namespace);
+    let found = futures::future::join_all(
+        wanted_secrets
+            .iter()
+            .map(|item| async { secret_api.get(item).await.map(|secret| (item.clone(), secret)).ok() }),
+    )
+    .await;
+    let secrets: BTreeMap<String, Secret> = found.into_iter().flatten().collect();
+    (config_maps, secrets)
+}
+
 fn secret_text(bytes: &[u8]) -> (String, bool) {
     match std::str::from_utf8(bytes) {
         Ok(text) => (text.to_string(), false),
@@ -3610,5 +4307,565 @@ mod event_tests {
         let mut spec = event("FailedScheduling", "Warning", Some(ago(5)));
         spec.message = Some("0/3 nodes are available: 3 Insufficient cpu".to_string());
         assert!(!is_probe_warning(&spec));
+    }
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::*;
+    use k8s_openapi::api::core::v1::{
+        ConfigMapEnvSource, ConfigMapKeySelector, ConfigMapProjection, ConfigMapVolumeSource,
+        EnvFromSource, EnvVar, EnvVarSource, KeyToPath, ObjectFieldSelector, PodSpec,
+        ProjectedVolumeSource, ResourceFieldSelector, ResourceRequirements, SecretEnvSource,
+        SecretKeySelector, SecretProjection, SecretVolumeSource, VolumeMount, VolumeProjection,
+    };
+    use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+    use k8s_openapi::ByteString;
+
+    fn pod() -> Pod {
+        let mount = |name: &str, path: &str, read_only: bool, sub_path: Option<&str>| VolumeMount {
+            name: name.to_string(),
+            mount_path: path.to_string(),
+            read_only: Some(read_only),
+            sub_path: sub_path.map(str::to_string),
+            ..VolumeMount::default()
+        };
+        let env = |name: &str, value: &str| EnvVar {
+            name: name.to_string(),
+            value: Some(value.to_string()),
+            ..EnvVar::default()
+        };
+        Pod {
+            metadata: ObjectMeta {
+                name: Some("app-0".to_string()),
+                namespace: Some("apps".to_string()),
+                uid: Some("uid-1".to_string()),
+                ..ObjectMeta::default()
+            },
+            spec: Some(PodSpec {
+                node_name: Some("node-a".to_string()),
+                service_account_name: Some("app-sa".to_string()),
+                containers: vec![Container {
+                    name: "app".to_string(),
+                    volume_mounts: Some(vec![
+                        mount("config", "/etc/app", false, None),
+                        mount("creds", "/etc/creds", true, Some("password")),
+                        mount("scratch", "/tmp", false, None),
+                        mount("projected", "/etc/projected", false, None),
+                    ]),
+                    env: Some(vec![
+                        env("LOG_LEVEL", "debug"),
+                        EnvVar {
+                            name: "FEATURE_FLAG".to_string(),
+                            value_from: Some(EnvVarSource {
+                                config_map_key_ref: Some(ConfigMapKeySelector {
+                                    name: "app-config".to_string(),
+                                    key: "FEATURE_FLAG".to_string(),
+                                    ..ConfigMapKeySelector::default()
+                                }),
+                                ..EnvVarSource::default()
+                            }),
+                            ..EnvVar::default()
+                        },
+                        EnvVar {
+                            name: "DB_PASSWORD".to_string(),
+                            value_from: Some(EnvVarSource {
+                                secret_key_ref: Some(SecretKeySelector {
+                                    name: "db-creds".to_string(),
+                                    key: "password".to_string(),
+                                    ..SecretKeySelector::default()
+                                }),
+                                ..EnvVarSource::default()
+                            }),
+                            ..EnvVar::default()
+                        },
+                        EnvVar {
+                            name: "NODE".to_string(),
+                            value_from: Some(EnvVarSource {
+                                field_ref: Some(ObjectFieldSelector {
+                                    field_path: "spec.nodeName".to_string(),
+                                    ..ObjectFieldSelector::default()
+                                }),
+                                ..EnvVarSource::default()
+                            }),
+                            ..EnvVar::default()
+                        },
+                        EnvVar {
+                            name: "CPU_LIMIT".to_string(),
+                            value_from: Some(EnvVarSource {
+                                resource_field_ref: Some(ResourceFieldSelector {
+                                    resource: "limits.cpu".to_string(),
+                                    ..ResourceFieldSelector::default()
+                                }),
+                                ..EnvVarSource::default()
+                            }),
+                            ..EnvVar::default()
+                        },
+                        EnvVar {
+                            name: "GONE".to_string(),
+                            value_from: Some(EnvVarSource {
+                                config_map_key_ref: Some(ConfigMapKeySelector {
+                                    name: "app-config".to_string(),
+                                    key: "MISSING".to_string(),
+                                    ..ConfigMapKeySelector::default()
+                                }),
+                                ..EnvVarSource::default()
+                            }),
+                            ..EnvVar::default()
+                        },
+                    ]),
+                    env_from: Some(vec![
+                        EnvFromSource {
+                            prefix: Some("CFG_".to_string()),
+                            config_map_ref: Some(ConfigMapEnvSource {
+                                name: "app-config".to_string(),
+                                ..ConfigMapEnvSource::default()
+                            }),
+                            ..EnvFromSource::default()
+                        },
+                        EnvFromSource {
+                            secret_ref: Some(SecretEnvSource {
+                                name: "db-creds".to_string(),
+                                ..SecretEnvSource::default()
+                            }),
+                            ..EnvFromSource::default()
+                        },
+                        EnvFromSource {
+                            config_map_ref: Some(ConfigMapEnvSource {
+                                name: "absent".to_string(),
+                                ..ConfigMapEnvSource::default()
+                            }),
+                            ..EnvFromSource::default()
+                        },
+                    ]),
+                    resources: Some(ResourceRequirements {
+                        limits: Some(BTreeMap::from([(
+                            "cpu".to_string(),
+                            Quantity("500m".to_string()),
+                        )])),
+                        ..ResourceRequirements::default()
+                    }),
+                    ..Container::default()
+                }],
+                init_containers: Some(vec![Container {
+                    name: "init".to_string(),
+                    volume_mounts: Some(vec![mount("config", "/init", false, None)]),
+                    ..Container::default()
+                }]),
+                volumes: Some(vec![
+                    Volume {
+                        name: "config".to_string(),
+                        config_map: Some(ConfigMapVolumeSource {
+                            name: "app-config".to_string(),
+                            ..ConfigMapVolumeSource::default()
+                        }),
+                        ..Volume::default()
+                    },
+                    Volume {
+                        name: "creds".to_string(),
+                        secret: Some(SecretVolumeSource {
+                            secret_name: Some("db-creds".to_string()),
+                            ..SecretVolumeSource::default()
+                        }),
+                        ..Volume::default()
+                    },
+                    Volume {
+                        name: "scratch".to_string(),
+                        empty_dir: Some(Default::default()),
+                        ..Volume::default()
+                    },
+                    Volume {
+                        name: "projected".to_string(),
+                        projected: Some(ProjectedVolumeSource {
+                            sources: Some(vec![
+                                VolumeProjection {
+                                    config_map: Some(ConfigMapProjection {
+                                        name: "app-config".to_string(),
+                                        items: Some(vec![KeyToPath {
+                                            key: "FEATURE_FLAG".to_string(),
+                                            path: "flag".to_string(),
+                                            ..KeyToPath::default()
+                                        }]),
+                                        ..ConfigMapProjection::default()
+                                    }),
+                                    ..VolumeProjection::default()
+                                },
+                                VolumeProjection {
+                                    secret: Some(SecretProjection {
+                                        name: "db-creds".to_string(),
+                                        ..SecretProjection::default()
+                                    }),
+                                    ..VolumeProjection::default()
+                                },
+                            ]),
+                            ..ProjectedVolumeSource::default()
+                        }),
+                        ..Volume::default()
+                    },
+                ]),
+                ..PodSpec::default()
+            }),
+            ..Pod::default()
+        }
+    }
+
+    fn maps() -> (BTreeMap<String, ConfigMap>, BTreeMap<String, Secret>) {
+        let config_maps = BTreeMap::from([(
+            "app-config".to_string(),
+            ConfigMap {
+                metadata: ObjectMeta {
+                    name: Some("app-config".to_string()),
+                    ..ObjectMeta::default()
+                },
+                data: Some(BTreeMap::from([
+                    ("FEATURE_FLAG".to_string(), "on".to_string()),
+                    ("LOG_LEVEL".to_string(), "info".to_string()),
+                ])),
+                ..ConfigMap::default()
+            },
+        )]);
+        let secrets = BTreeMap::from([(
+            "db-creds".to_string(),
+            Secret {
+                metadata: ObjectMeta {
+                    name: Some("db-creds".to_string()),
+                    ..ObjectMeta::default()
+                },
+                data: Some(BTreeMap::from([(
+                    "password".to_string(),
+                    ByteString(b"s3cr3t".to_vec()),
+                )])),
+                ..Secret::default()
+            },
+        )]);
+        (config_maps, secrets)
+    }
+
+    #[test]
+    fn reads_only_the_referenced_objects() {
+        let (maps, secrets) = pod_references(&pod());
+        assert_eq!(maps.into_iter().collect::<Vec<_>>(), ["absent", "app-config"]);
+        assert_eq!(secrets.into_iter().collect::<Vec<_>>(), ["db-creds"]);
+    }
+
+    #[test]
+    fn lists_mounts_with_their_source_and_values() {
+        let (config_maps, secrets) = maps();
+        let (mounts, _) = pod_sources(&pod(), &config_maps, &secrets, false);
+        let find = |name: &str, container: &str| {
+            mounts
+                .iter()
+                .find(|item| item.name == name && item.container == container)
+                .unwrap()
+        };
+        let config = find("config", "app");
+        assert_eq!(config.path, "/etc/app");
+        assert_eq!(config.source, "configMap app-config");
+        assert!(!config.read_only);
+        assert_eq!(
+            config.values.iter().map(|item| item.key.as_str()).collect::<Vec<_>>(),
+            ["FEATURE_FLAG", "LOG_LEVEL"]
+        );
+        assert_eq!(config.values[0].value, "on");
+
+        let creds = find("creds", "app");
+        assert!(creds.read_only);
+        assert_eq!(creds.sub_path.as_deref(), Some("password"));
+        // The value travels, the flag tells the UI to hide it.
+        assert!(creds.values[0].masked);
+        assert_eq!(creds.values[0].value, "s3cr3t");
+
+        assert_eq!(find("scratch", "app").source, "emptyDir");
+        assert!(find("scratch", "app").values.is_empty());
+
+        let projected = find("projected", "app");
+        assert_eq!(projected.source, "projected");
+        // Only the key named in `items` plus the whole secret.
+        assert_eq!(
+            projected.values.iter().map(|item| item.key.as_str()).collect::<Vec<_>>(),
+            ["FEATURE_FLAG", "password"]
+        );
+
+        // Init containers mount the same volume.
+        assert_eq!(find("config", "init").path, "/init");
+    }
+
+    #[test]
+    fn reveals_secret_values_on_request() {
+        let (config_maps, secrets) = maps();
+        let (mounts, env) = pod_sources(&pod(), &config_maps, &secrets, true);
+        assert_eq!(mounts[1].values[0].value, "s3cr3t");
+        assert!(!mounts[1].values[0].masked);
+        let password = env.iter().find(|item| item.name == "DB_PASSWORD").unwrap();
+        assert_eq!(password.value, "s3cr3t");
+        assert!(!password.masked);
+    }
+
+    #[test]
+    fn resolves_every_kind_of_env_source() {
+        let (config_maps, secrets) = maps();
+        let (_, env) = pod_sources(&pod(), &config_maps, &secrets, false);
+        let get = |name: &str| env.iter().find(|item| item.name == name).unwrap().clone();
+
+        assert_eq!(get("LOG_LEVEL").origin, "literal");
+        assert_eq!(get("LOG_LEVEL").value, "debug");
+
+        let flag = get("FEATURE_FLAG");
+        assert_eq!(flag.origin, "configMap app-config");
+        assert_eq!(flag.key.as_deref(), Some("FEATURE_FLAG"));
+        assert_eq!(flag.value, "on");
+
+        let password = get("DB_PASSWORD");
+        assert_eq!(password.origin, "secret db-creds");
+        assert_eq!(password.value, "s3cr3t");
+        assert!(password.masked);
+
+        assert_eq!(get("NODE").origin, "fieldRef spec.nodeName");
+        assert_eq!(get("NODE").value, "node-a");
+
+        assert_eq!(get("CPU_LIMIT").origin, "resourceFieldRef limits.cpu");
+        assert_eq!(get("CPU_LIMIT").value, "500m");
+
+        let missing = get("GONE");
+        assert_eq!(missing.value, "");
+        assert_eq!(
+            missing.note.as_deref(),
+            Some("key MISSING missing in ConfigMap app-config")
+        );
+
+        // envFrom expands every key, honours the prefix and reports a miss.
+        let prefixed = get("CFG_LOG_LEVEL");
+        assert_eq!(prefixed.value, "info");
+        assert_eq!(prefixed.origin, "configMap app-config (envFrom)");
+        let from_secret = get("password");
+        assert_eq!(from_secret.value, "s3cr3t");
+        assert!(from_secret.masked);
+        assert_eq!(from_secret.origin, "secret db-creds (envFrom)");
+        let absent = env
+            .iter()
+            .find(|item| item.origin == "configMap absent (envFrom)")
+            .unwrap();
+        assert!(absent.note.is_some());
+        assert_eq!(absent.value, "");
+    }
+
+    #[test]
+    fn reports_unreadable_sources_instead_of_failing() {
+        let empty: BTreeMap<String, ConfigMap> = BTreeMap::new();
+        let no_secrets: BTreeMap<String, Secret> = BTreeMap::new();
+        let (mounts, env) = pod_sources(&pod(), &empty, &no_secrets, false);
+        let config = mounts.iter().find(|item| item.name == "config").unwrap();
+        assert_eq!(
+            config.note.as_deref(),
+            Some("ConfigMap app-config not found or not readable")
+        );
+        assert!(config.values.is_empty());
+        let password = env.iter().find(|item| item.name == "DB_PASSWORD").unwrap();
+        assert_eq!(
+            password.note.as_deref(),
+            Some("key password missing in Secret db-creds")
+        );
+    }
+}
+
+#[cfg(test)]
+mod container_tests {
+    use super::*;
+    use k8s_openapi::api::core::v1::{
+        ContainerPort, ContainerState, ContainerStateRunning, ContainerStateTerminated,
+        ContainerStateWaiting, ContainerStatus, EnvFromSource, EnvVar, EnvVarSource, PodSpec,
+        PodStatus, ResourceRequirements, SecretEnvSource, SecretKeySelector, SecretVolumeSource,
+        VolumeMount,
+    };
+    use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
+
+    fn quantities(items: &[(&str, &str)]) -> BTreeMap<String, Quantity> {
+        items
+            .iter()
+            .map(|(key, value)| (key.to_string(), Quantity(value.to_string())))
+            .collect()
+    }
+
+    #[test]
+    fn lists_containers_with_ports_status_resources_env_and_mounts() {
+        let pod = Pod {
+            spec: Some(PodSpec {
+                containers: vec![Container {
+                    name: "app".to_string(),
+                    image: Some("nginx:1.27".to_string()),
+                    ports: Some(vec![ContainerPort {
+                        container_port: 8080,
+                        name: Some("http".to_string()),
+                        protocol: Some("TCP".to_string()),
+                        ..ContainerPort::default()
+                    }]),
+                    env: Some(vec![
+                        EnvVar {
+                            name: "MODE".to_string(),
+                            value: Some("prod".to_string()),
+                            ..EnvVar::default()
+                        },
+                        EnvVar {
+                            name: "DB_PASSWORD".to_string(),
+                            value_from: Some(EnvVarSource {
+                                secret_key_ref: Some(SecretKeySelector {
+                                    name: "db".to_string(),
+                                    key: "password".to_string(),
+                                    ..SecretKeySelector::default()
+                                }),
+                                ..EnvVarSource::default()
+                            }),
+                            ..EnvVar::default()
+                        },
+                    ]),
+                    env_from: Some(vec![EnvFromSource {
+                        prefix: Some("APP_".to_string()),
+                        secret_ref: Some(SecretEnvSource {
+                            name: "shared".to_string(),
+                            ..SecretEnvSource::default()
+                        }),
+                        ..EnvFromSource::default()
+                    }]),
+                    volume_mounts: Some(vec![
+                        VolumeMount {
+                            name: "creds".to_string(),
+                            mount_path: "/etc/creds".to_string(),
+                            read_only: Some(true),
+                            sub_path: Some("password".to_string()),
+                            ..VolumeMount::default()
+                        },
+                        VolumeMount {
+                            name: "ghost".to_string(),
+                            mount_path: "/gone".to_string(),
+                            ..VolumeMount::default()
+                        },
+                    ]),
+                    resources: Some(ResourceRequirements {
+                        requests: Some(quantities(&[("cpu", "50m"), ("memory", "64Mi")])),
+                        limits: Some(quantities(&[("cpu", "1")])),
+                        ..ResourceRequirements::default()
+                    }),
+                    ..Container::default()
+                }],
+                init_containers: Some(vec![Container {
+                    name: "init".to_string(),
+                    ..Container::default()
+                }]),
+                volumes: Some(vec![Volume {
+                    name: "creds".to_string(),
+                    secret: Some(SecretVolumeSource {
+                        secret_name: Some("creds".to_string()),
+                        ..SecretVolumeSource::default()
+                    }),
+                    ..Volume::default()
+                }]),
+                ..PodSpec::default()
+            }),
+            status: Some(PodStatus {
+                container_statuses: Some(vec![ContainerStatus {
+                    name: "app".to_string(),
+                    ready: true,
+                    restart_count: 3,
+                    state: Some(ContainerState {
+                        running: Some(ContainerStateRunning::default()),
+                        ..ContainerState::default()
+                    }),
+                    ..ContainerStatus::default()
+                }]),
+                ..PodStatus::default()
+            }),
+            ..Pod::default()
+        };
+        let empty_maps: BTreeMap<String, ConfigMap> = BTreeMap::new();
+        let empty_secrets: BTreeMap<String, Secret> = BTreeMap::new();
+        let containers = pod_containers(&pod, &empty_maps, &empty_secrets, false);
+        assert_eq!(containers.len(), 2);
+
+        let app = &containers[0];
+        assert_eq!(app.name, "app");
+        assert_eq!(app.image, "nginx:1.27");
+        assert!(!app.init);
+        assert_eq!(app.ports, vec!["8080/TCP http"]);
+        assert_eq!(app.state, "Running");
+        assert!(app.ready);
+        assert_eq!(app.restarts, 3);
+        assert_eq!(app.requests.get("cpu").map(String::as_str), Some("50m"));
+        assert_eq!(
+            app.requests.get("memory").map(String::as_str),
+            Some("64Mi")
+        );
+        assert_eq!(app.limits.get("cpu").map(String::as_str), Some("1"));
+        assert!(app.limits.get("memory").is_none());
+
+        assert_eq!(app.env[0].name, "MODE");
+        assert_eq!(app.env[0].value, "prod");
+        assert_eq!(app.env[1].origin, "secret db");
+        assert_eq!(app.env[1].key.as_deref(), Some("password"));
+        assert!(app.env[1].note.is_some());
+        assert_eq!(app.env[2].name, "APP_<all keys>");
+        assert_eq!(app.env[2].origin, "secret shared (envFrom)");
+
+        assert_eq!(app.mounts.len(), 2);
+        assert_eq!(app.mounts[0].source, "secret creds");
+        assert!(app.mounts[0].read_only);
+        assert_eq!(app.mounts[1].source, "missing");
+        assert!(app.mounts[1].note.is_some());
+
+        let init = &containers[1];
+        assert!(init.init);
+        assert_eq!(init.state, "Pending");
+        assert!(!init.ready);
+        assert_eq!(init.restarts, 0);
+    }
+
+    #[test]
+    fn reports_waiting_reason_and_terminated_exit_code() {
+        let status_of = |state: ContainerState| ContainerStatus {
+            name: "app".to_string(),
+            state: Some(state),
+            ..ContainerStatus::default()
+        };
+        let pod = |state: ContainerState| Pod {
+            spec: Some(PodSpec {
+                containers: vec![Container {
+                    name: "app".to_string(),
+                    ..Container::default()
+                }],
+                ..PodSpec::default()
+            }),
+            status: Some(PodStatus {
+                container_statuses: Some(vec![status_of(state)]),
+                ..PodStatus::default()
+            }),
+            ..Pod::default()
+        };
+
+        let waiting = pod(ContainerState {
+            waiting: Some(ContainerStateWaiting {
+                reason: Some("CrashLoopBackOff".to_string()),
+                ..ContainerStateWaiting::default()
+            }),
+            ..ContainerState::default()
+        });
+        let empty_maps: BTreeMap<String, ConfigMap> = BTreeMap::new();
+        let empty_secrets: BTreeMap<String, Secret> = BTreeMap::new();
+        assert_eq!(
+            pod_containers(&waiting, &empty_maps, &empty_secrets, false)[0].state,
+            "Waiting: CrashLoopBackOff"
+        );
+
+        let terminated = pod(ContainerState {
+            terminated: Some(ContainerStateTerminated {
+                reason: Some("Error".to_string()),
+                exit_code: 1,
+                ..ContainerStateTerminated::default()
+            }),
+            ..ContainerState::default()
+        });
+        assert_eq!(
+            pod_containers(&terminated, &empty_maps, &empty_secrets, false)[0].state,
+            "Terminated: Error (exit 1)"
+        );
     }
 }

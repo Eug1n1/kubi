@@ -274,6 +274,74 @@ pub struct ObjectWarning {
     pub probe_only: bool,
 }
 
+/// One key/value pair a pod receives from a ConfigMap or Secret.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PodValue {
+    pub key: String,
+    pub value: String,
+    /// True for a Secret value that the UI hides until it is revealed on purpose.
+    pub masked: bool,
+    pub binary: bool,
+}
+
+/// Where one container mounts a volume, and what backs it.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PodMount {
+    pub container: String,
+    /// Volume name from `spec.volumes`.
+    pub name: String,
+    pub path: String,
+    pub read_only: bool,
+    pub sub_path: Option<String>,
+    /// Human label for the source, e.g. `configMap app-config`.
+    pub source: String,
+    /// Keys this mount exposes, when a ConfigMap or Secret backs it.
+    pub values: Vec<PodValue>,
+    pub note: Option<String>,
+}
+
+/// One environment variable of one container, with where its value came from.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PodEnv {
+    pub container: String,
+    pub name: String,
+    /// `literal`, `configMap app-config`, `secret db`, `fieldRef spec.nodeName`, …
+    pub origin: String,
+    /// Key inside the ConfigMap or Secret, when the value comes from one.
+    pub key: Option<String>,
+    pub value: String,
+    /// True for a Secret value that the UI hides until it is revealed on purpose.
+    pub masked: bool,
+    pub binary: bool,
+    pub note: Option<String>,
+}
+
+/// One container of a pod: spec facts plus its live status. Env and mounts are
+/// resolved through the referenced ConfigMaps and Secrets, the same way the
+/// Sources tab does it.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PodContainer {
+    pub name: String,
+    pub image: String,
+    /// True for init containers, listed after the regular ones.
+    pub init: bool,
+    /// `8080/TCP http` style labels, in spec order.
+    pub ports: Vec<String>,
+    /// `Running`, `Waiting: CrashLoopBackOff`, `Terminated: Error`, `Pending`.
+    pub state: String,
+    pub ready: bool,
+    pub restarts: i32,
+    /// Resource name to quantity, e.g. `cpu: 50m`, sorted by name.
+    pub requests: BTreeMap<String, String>,
+    pub limits: BTreeMap<String, String>,
+    pub env: Vec<PodEnv>,
+    pub mounts: Vec<PodMount>,
+}
+
 /// One event from the object's own namespace, newest warnings first.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -449,6 +517,20 @@ pub enum Command {
     FetchWarnings {
         namespace: Option<String>,
     },
+    /// Volumes and environment of a pod, with ConfigMap/Secret values resolved.
+    FetchPodSources {
+        namespace: String,
+        name: String,
+        uid: String,
+        reveal: bool,
+    },
+    /// Spec and status of every container of a pod, env values resolved.
+    FetchPodContainers {
+        namespace: String,
+        name: String,
+        uid: String,
+        reveal: bool,
+    },
     RefreshCatalog,
     Delete {
         target: WatchTarget,
@@ -552,6 +634,15 @@ pub enum AppEvent {
     ObjectEvents {
         uid: String,
         events: Vec<EventInfo>,
+    },
+    PodSources {
+        uid: String,
+        mounts: Vec<PodMount>,
+        env: Vec<PodEnv>,
+    },
+    PodContainers {
+        uid: String,
+        containers: Vec<PodContainer>,
     },
     Warnings {
         /// Namespace the scan covered, `None` for the whole cluster.
@@ -680,6 +771,21 @@ mod serde_tests {
             serde_json::to_value(Command::StopLog { id: 4 }).unwrap()["stopLog"]["id"],
             4
         );
+        assert_eq!(
+            serde_json::to_value(Command::FetchPodContainers {
+                namespace: "default".into(),
+                name: "app".into(),
+                uid: "1".into(),
+                reveal: true,
+            })
+            .unwrap()["fetchPodContainers"]["reveal"],
+            true
+        );
+        let containers = AppEvent::PodContainers {
+            uid: "1".into(),
+            containers: Vec::new(),
+        };
+        assert_eq!(serde_json::to_value(containers).unwrap()["podContainers"]["uid"], "1");
         assert_eq!(
             serde_json::to_value(Command::StopExecs).unwrap(),
             serde_json::json!("stopExecs")
