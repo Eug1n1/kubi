@@ -4,6 +4,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { cursorPosition, getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readSettingsFile, send, writeSettingsFile } from "./api";
+import { setClusterColors } from "./format";
 import {
   DEFAULT_KEYMAP,
   isTypedKey,
@@ -18,6 +19,7 @@ import type {
   AppEvent,
   ClusterOverview,
   ContextInfo,
+  ContextMenu,
   CrTarget,
   Home,
   DockExec,
@@ -41,6 +43,14 @@ import { eventKey, sameTarget, sameView, watchOf } from "./types";
 import { canExec, canForward, canLogs, canRestart, logTitle, podSettled, viewTitle } from "./catalog";
 
 type HistPoint = { t: number; cpu: number; mem: number };
+
+/** A copy of a per-context map without one key. */
+function omit<T>(map: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in map)) return map;
+  const next = { ...map };
+  delete next[key];
+  return next;
+}
 
 /** Warning scan throttle: refreshes at most this often while a list is open. */
 const WARNINGS_TTL_MS = 8_000;
@@ -216,6 +226,11 @@ export function useKubi() {
     execContainer: () => {},
   });
   const [menu, setMenu] = useState<RowMenu | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<ContextMenu | null>(null);
+  /** Context colours picked by hand; empty means "hue of the name". */
+  const [colors, setColors] = useState<Record<string, string>>({});
+  /** Contexts this window holds a connection to, so the menu can say so. */
+  const [connected, setConnected] = useState<string[]>([]);
   const [forwards, setForwards] = useState<PortForward[]>([]);
   const [forwardDraft, setForwardDraft] = useState<ForwardDraft | null>(null);
   const [patchError, setPatchError] = useState<string | null>(null);
@@ -617,6 +632,28 @@ export function useKubi() {
     setTabs(next);
   }
 
+  /**
+   * Drops every tab of one cluster after the engine dropped the cluster itself.
+   * Its watches are already stopped there, so this only moves the window off
+   * them: the front tab follows a survivor, or nothing when none is left.
+   */
+  function dropTabsOf(context: string) {
+    const before = session.current.tabs;
+    const front = session.current.active == null ? null : (before[session.current.active] ?? null);
+    const remaining = before.filter((tab) => tab.context !== context);
+    if (remaining.length === before.length) return;
+    commitTabs(remaining);
+    if (remaining.length === 0) {
+      session.current.active = null;
+      setActive(null);
+      return;
+    }
+    const kept = front != null && front.context !== context ? remaining.indexOf(front) : -1;
+    const index = kept >= 0 ? kept : remaining.length - 1;
+    session.current.active = index;
+    setActive(index);
+  }
+
   function reorderTabs(from: number, to: number) {
     const items = session.current.tabs;
     if (from === to || from < 0 || to < 0 || from >= items.length || to >= items.length) return;
@@ -952,6 +989,7 @@ export function useKubi() {
     setContext(name);
     setPendingDelete(null);
     setMenu(null);
+    setCtxMenu(null);
     setCreateOpen(false);
     setCreateError(null);
     setCreateBusy(false);
@@ -995,6 +1033,9 @@ export function useKubi() {
       setLoadingConfig(false);
       clearErrors();
       setContexts(event.contexts);
+      // A context that left the kubeconfig cannot stay "connected" here.
+      const names = new Set(event.contexts.map((item) => item.name));
+      setConnected((list) => list.filter((name) => names.has(name)));
       if (event.contexts.length === 0) {
         setConnecting(false);
         setCustomResources({});
@@ -1012,13 +1053,37 @@ export function useKubi() {
       return;
     }
     if (key === "connected" && "connected" in event) {
-      if (session.current.context !== event.connected.context) return;
       const from = event.connected.context;
+      // Worth remembering even when another cluster is the one in front.
+      setConnected((names) => (names.includes(from) ? names : [...names, from]));
+      if (session.current.context !== from) return;
       setNamespaces((all) => ({ ...all, [from]: event.connected.namespaces }));
       session.current.defaults[from] = event.connected.defaultNamespace;
       setConnecting(false);
       clearErrors();
       void send({ fetchOverview: { context: from } });
+      return;
+    }
+    if (key === "disconnected" && "disconnected" in event) {
+      const gone = event.disconnected.context;
+      setConnected((names) => names.filter((name) => name !== gone));
+      // Whatever the window kept for that cluster goes with it.
+      setNamespaces((all) => omit(all, gone));
+      setCustomResources((all) => omit(all, gone));
+      setOverview((all) => omit(all, gone));
+      setCtxMenu(null);
+      dropTabsOf(gone);
+      if (session.current.context === gone) {
+        // The window follows the tab left in front, or another context entirely.
+        const front = session.current.active == null ? null : session.current.tabs[session.current.active];
+        const next =
+          front?.context ?? contexts.find((item) => item.name !== gone)?.name ?? null;
+        if (next) switchContext(next);
+        else {
+          session.current.context = null;
+          setContext(null);
+        }
+      }
       return;
     }
     if (key === "error" && "error" in event) {
@@ -1415,6 +1480,10 @@ export function useKubi() {
         const prefs = parsePrefs(text);
         setKeymap(prefs.keymap);
         setTheme(prefs.theme);
+        setColors(prefs.colors);
+        // Every strip and badge reads the colour through this map, so it has to
+        // be in place before the first render that shows one.
+        setClusterColors(prefs.colors);
       })
       .catch(() => {
         if (!stop) pushError("Settings could not be read");
@@ -1429,16 +1498,16 @@ export function useKubi() {
     applyTheme(theme);
   }, [theme]);
 
-  function persist(nextKeymap: Keymap, nextTheme: Theme) {
-    void writeSettingsFile(serializePrefs({ keymap: nextKeymap, theme: nextTheme })).catch(() =>
-      pushError("Settings could not be saved"),
-    );
+  function persist(nextKeymap: Keymap, nextTheme: Theme, nextColors: Record<string, string>) {
+    void writeSettingsFile(
+      serializePrefs({ keymap: nextKeymap, theme: nextTheme, colors: nextColors }),
+    ).catch(() => pushError("Settings could not be saved"));
   }
 
   /** Applies a change immediately, keeping the running state even if the write fails. */
   function commitKeymap(next: Keymap) {
     setKeymap(next);
-    persist(next, theme);
+    persist(next, theme, colors);
   }
 
   useEffect(() => {
@@ -1527,6 +1596,7 @@ export function useKubi() {
       haltPane("exec");
       session.current.context = null;
       setContext(null);
+      setConnected([]);
       setLoadingConfig(true);
       void send({ setKubeconfig: { path: picked } });
     },
@@ -1642,9 +1712,35 @@ export function useKubi() {
       const index = session.current.active;
       const tab = index == null ? undefined : session.current.tabs[index];
       if (index != null && tab && !tab.selection.includes(uid)) focusRow(index, uid, [uid], uid);
+      setCtxMenu(null);
       setMenu({ x, y, uid });
     },
     closeMenu: () => setMenu(null),
+    ctxMenu,
+    /** Contexts this window holds a connection to, in the order they connected. */
+    connectedContexts: connected,
+    /** Context colours picked by hand, keyed by context name. */
+    clusterColors: colors,
+    openContextMenu: (x: number, y: number, name: string) => {
+      setMenu(null);
+      setCtxMenu({ x, y, name });
+    },
+    closeContextMenu: () => setCtxMenu(null),
+    /** Drops one cluster; the window closes its tabs when the engine confirms. */
+    disconnectContext: (name: string) => {
+      setCtxMenu(null);
+      void send({ disconnect: { context: name } });
+    },
+    /** Picks a colour for a context, or `null` to go back to the hue of its name. */
+    setClusterColor: (name: string, color: string | null) => {
+      const next = { ...colors };
+      if (color == null) delete next[name];
+      else next[name] = color;
+      // Plain helpers read this map too, so it changes before the re-render.
+      setClusterColors(next);
+      setColors(next);
+      persist(keymap, theme, next);
+    },
     setReveal: (reveal: boolean) => {
       const index = session.current.active;
       if (index == null) return;
@@ -1834,11 +1930,11 @@ export function useKubi() {
     updateTheme: (patch: Partial<Theme>) => {
       const next = { ...theme, ...patch };
       setTheme(next);
-      persist(keymap, next);
+      persist(keymap, next, colors);
     },
     resetTheme: () => {
       setTheme(DEFAULT_THEME);
-      persist(keymap, DEFAULT_THEME);
+      persist(keymap, DEFAULT_THEME, colors);
     },
     bindFilter: (focus: (() => void) | null) => {
       focusFilter.current = focus;

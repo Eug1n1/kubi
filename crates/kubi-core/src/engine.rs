@@ -175,13 +175,21 @@ struct Engine {
     watches: std::collections::HashMap<String, CancellationToken>,
     /// Custom resource catalog per context.
     catalogs: std::collections::HashMap<String, CancellationToken>,
-    logs: std::collections::HashMap<u64, CancellationToken>,
-    forwards: std::collections::HashMap<u64, CancellationToken>,
+    logs: std::collections::HashMap<u64, LiveStream>,
+    forwards: std::collections::HashMap<u64, LiveStream>,
     execs: std::collections::HashMap<u64, ExecSlot>,
     argo_cache: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, ArgoTargets>>>,
 }
 
+/// A stream that outlives the command that started it, with the cluster it
+/// belongs to, so dropping one cluster stops only its streams.
+struct LiveStream {
+    context: String,
+    cancel: CancellationToken,
+}
+
 struct ExecSlot {
+    context: String,
     cancel: CancellationToken,
     input: tokio::sync::mpsc::UnboundedSender<ExecMsg>,
 }
@@ -230,6 +238,7 @@ impl Engine {
                 self.emit_contexts();
             }
             Command::Connect { context } => self.connect(context).await,
+            Command::Disconnect { context } => self.disconnect(context),
             Command::SetNamespace { context, namespace } => {
                 self.namespaces.insert(context, namespace);
             }
@@ -382,6 +391,26 @@ impl Engine {
             namespaces,
             default_namespace,
         });
+    }
+
+    /// Drops one cluster: its client, its watches, its catalog and its live
+    /// sessions. Every other cluster keeps all of that, which is the point of
+    /// naming a context on every command.
+    fn disconnect(&mut self, context: String) {
+        self.stop_watch(&context);
+        self.stop_catalog(&context);
+        self.stop_context_logs(&context);
+        self.stop_context_forwards(&context);
+        self.stop_context_execs(&context);
+        self.clients.remove(&context);
+        self.namespaces.remove(&context);
+        if let Ok(mut cache) = self.argo_cache.lock() {
+            cache.remove(&context);
+        }
+        if self.context.as_deref() == Some(context.as_str()) {
+            self.context = None;
+        }
+        self.emit(AppEvent::Disconnected { context });
     }
 
     /// The client for one context, or `None` when it was never connected.
@@ -778,14 +807,27 @@ impl Engine {
     }
 
     fn stop_log(&mut self, id: u64) {
-        if let Some(token) = self.logs.remove(&id) {
-            token.cancel();
+        if let Some(stream) = self.logs.remove(&id) {
+            stream.cancel.cancel();
         }
     }
 
     fn stop_logs(&mut self) {
-        for (_, token) in self.logs.drain() {
-            token.cancel();
+        for (_, stream) in self.logs.drain() {
+            stream.cancel.cancel();
+        }
+    }
+
+    /// Ends the log streams of one cluster, leaving the other clusters alone.
+    fn stop_context_logs(&mut self, context: &str) {
+        let ids: Vec<u64> = self
+            .logs
+            .iter()
+            .filter(|(_, stream)| stream.context == context)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            self.stop_log(id);
         }
     }
 
@@ -796,14 +838,27 @@ impl Engine {
     }
 
     fn stop_forward(&mut self, id: u64) {
-        if let Some(token) = self.forwards.remove(&id) {
-            token.cancel();
+        if let Some(stream) = self.forwards.remove(&id) {
+            stream.cancel.cancel();
         }
     }
 
     fn stop_forwards(&mut self) {
-        for (_, token) in self.forwards.drain() {
-            token.cancel();
+        for (_, stream) in self.forwards.drain() {
+            stream.cancel.cancel();
+        }
+    }
+
+    /// Ends the port forwards of one cluster, leaving the other clusters alone.
+    fn stop_context_forwards(&mut self, context: &str) {
+        let ids: Vec<u64> = self
+            .forwards
+            .iter()
+            .filter(|(_, stream)| stream.context == context)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            self.stop_forward(id);
         }
     }
 
@@ -828,7 +883,13 @@ impl Engine {
             return;
         }
         let cancel = CancellationToken::new();
-        self.forwards.insert(id, cancel.clone());
+        self.forwards.insert(
+            id,
+            LiveStream {
+                context,
+                cancel: cancel.clone(),
+            },
+        );
         let events = self.events.clone();
         tokio::spawn(async move {
             let result = forward_port(
@@ -864,6 +925,19 @@ impl Engine {
         }
     }
 
+    /// Ends the shells of one cluster, leaving the other clusters alone.
+    fn stop_context_execs(&mut self, context: &str) {
+        let ids: Vec<u64> = self
+            .execs
+            .iter()
+            .filter(|(_, slot)| slot.context == context)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            self.stop_exec(id);
+        }
+    }
+
     fn start_exec(
         &mut self,
         context: String,
@@ -882,6 +956,7 @@ impl Engine {
         self.execs.insert(
             id,
             ExecSlot {
+                context,
                 cancel: cancel.clone(),
                 input,
             },
@@ -946,7 +1021,13 @@ impl Engine {
             return;
         };
         let cancel = CancellationToken::new();
-        self.logs.insert(id, cancel.clone());
+        self.logs.insert(
+            id,
+            LiveStream {
+                context,
+                cancel: cancel.clone(),
+            },
+        );
         let events = self.events.clone();
         let label = name.clone();
         let query = LogQuery {
@@ -5044,5 +5125,71 @@ mod session_tests {
         engine.handle(Command::StopWatch { context: "dev".into() }).await;
         assert!(dev.is_cancelled());
         assert!(!prod.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn disconnect_stops_only_that_cluster() {
+        let (mut engine, rx) = engine();
+        let dev_watch = CancellationToken::new();
+        let prod_watch = CancellationToken::new();
+        engine.watches.insert("dev".into(), dev_watch.clone());
+        engine.watches.insert("prod".into(), prod_watch.clone());
+        engine.namespaces.insert("dev".into(), Some("team-a".into()));
+        engine.logs.insert(
+            1,
+            LiveStream {
+                context: "dev".into(),
+                cancel: CancellationToken::new(),
+            },
+        );
+        engine.forwards.insert(
+            2,
+            LiveStream {
+                context: "prod".into(),
+                cancel: CancellationToken::new(),
+            },
+        );
+        let dev_log = engine.logs.get(&1).expect("a log stream").cancel.clone();
+        let prod_forward = engine
+            .forwards
+            .get(&2)
+            .expect("a port forward")
+            .cancel
+            .clone();
+
+        engine
+            .handle(Command::Disconnect {
+                context: "dev".into(),
+            })
+            .await;
+
+        // The dropped cluster is gone, token and all.
+        assert!(dev_watch.is_cancelled());
+        assert!(dev_log.is_cancelled());
+        assert!(!engine.namespaces.contains_key("dev"));
+        // The cluster next to it is untouched.
+        assert!(!prod_watch.is_cancelled());
+        assert!(!prod_forward.is_cancelled());
+        assert!(engine.watches.contains_key("prod"));
+        assert!(engine.forwards.contains_key(&2));
+        match rx.try_recv().expect("an event") {
+            AppEvent::Disconnected { context } => assert_eq!(context, "dev"),
+            other => panic!("unexpected event {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn disconnecting_twice_is_harmless() {
+        let (mut engine, _rx) = engine();
+        for _ in 0..2 {
+            engine
+                .handle(Command::Disconnect {
+                    context: "never-opened".into(),
+                })
+                .await;
+        }
+        // No client was invented for a context that never connected.
+        assert!(engine.clients.is_empty());
+        assert!(engine.namespaces.is_empty());
     }
 }

@@ -260,6 +260,7 @@ export type Command =
   | "stopExecs"
   | { setKubeconfig: { path: string } }
   | { connect: { context: string } }
+  | { disconnect: { context: string } }
   | { setNamespace: { context: string; namespace: string | null } }
   | { watch: { context: string; target: WatchTarget } }
   | { stopWatch: { context: string } }
@@ -336,6 +337,7 @@ export type AppEvent =
         defaultNamespace: string | null;
       };
     }
+  | { disconnected: { context: string } }
   | { error: string }
   | { rows: { context: string; target: WatchTarget; rows: ResourceRow[] } }
   | { customResources: { context: string; targets: CrTarget[] } }
@@ -459,6 +461,13 @@ export type RowMenu = {
   x: number;
   y: number;
   uid: string;
+};
+
+/** Right-click menu on a context: which one, and where to draw it. */
+export type ContextMenu = {
+  x: number;
+  y: number;
+  name: string;
 };
 
 export type Tab = {

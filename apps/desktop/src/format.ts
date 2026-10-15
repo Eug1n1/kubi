@@ -70,7 +70,7 @@ export function initials(name: string): string {
 }
 
 /* Context strip hues: mid-lightness, so they read on the dark chrome. */
-const CLUSTER_COLORS = [
+export const CLUSTER_COLORS = [
   "#4c8dff",
   "#3fb950",
   "#d29922",
@@ -81,7 +81,22 @@ const CLUSTER_COLORS = [
   "#ff9e64",
 ];
 
+/**
+ * Colours the user picked for a context, by context name. Kept in a module
+ * variable because `clusterColor` is called from plain helpers as well as from
+ * components; the window mirrors the same map in its state, so a change
+ * re-renders everything that shows a colour.
+ */
+let chosen: Record<string, string> = {};
+
+export function setClusterColors(next: Record<string, string>): void {
+  chosen = next;
+}
+
+/** The context colour: the one the user picked, or the hue of its name. */
 export function clusterColor(name: string): string {
+  const picked = chosen[name];
+  if (picked) return picked;
   let hash = 2166136261;
   for (let i = 0; i < name.length; i += 1) {
     hash = (hash ^ name.charCodeAt(i)) >>> 0;

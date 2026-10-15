@@ -6,10 +6,10 @@
 import { writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ContextRail } from "../src/contexts";
+import { ContextMenuBody, ContextRail } from "../src/contexts";
 import { Colors, SettingsModal } from "../src/settings";
 import { LogPane } from "../src/logWindow";
-import { ArgoScreen, Detail, OverviewScreen, ResourceScreen, SearchModal, Sidebar, TopBar } from "../src/screens";
+import { ArgoScreen, Detail, OverviewScreen, ResourceScreen, RowMenu, SearchModal, Sidebar, TopBar } from "../src/screens";
 import { DEFAULT_KEYMAP } from "../src/keymap";
 import { DEFAULT_THEME, THEME_PRESETS, themeTokens } from "../src/theme";
 import type { Kubi } from "../src/useKubi";
@@ -144,6 +144,9 @@ function kubiFor(activeTab: Tab): Kubi {
     dockTabs: [],
     activeDock: null,
     menu: null,
+    ctxMenu: null,
+    connectedContexts: ["kz-mgmt", "kz-dev"],
+    clusterColors: {},
     searchOpen: false,
     settingsOpen: false,
     keymap: DEFAULT_KEYMAP,
@@ -166,6 +169,10 @@ function kubiFor(activeTab: Tab): Kubi {
     closeTab: noop,
     reorderTabs: noop,
     openMenu: noop,
+    openContextMenu: noop,
+    closeContextMenu: noop,
+    disconnectContext: noop,
+    setClusterColor: noop,
     openKubeconfig: async () => {},
     bindFilter: noop,
     setBinding: noop,
@@ -245,6 +252,29 @@ const detail = (detailTab: Tab["detailTab"], width = 460) => {
   return renderToStaticMarkup(<Detail kubi={kubi} width={width} onWidth={noop} />);
 };
 
+/** The context menu in both states, next to the row menu that shares its styles. */
+const menus = () => {
+  const base = kubiFor(tab("overview", null));
+  const live = { ...base, connectedContexts: ["kz-mgmt"] } as Kubi;
+  const idle = { ...base, connectedContexts: [], clusterColors: { "prod-eu": "#f778ba" } } as Kubi;
+  const icon =
+    '<svg viewBox="0 0 16 16" width="14" height="14"><path d="M3 4h10M6.5 4V2.6h3V4M4.6 4l.6 9h5.6l.6-9" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
+  return `<div class="pv-side">
+    <div class="menu" style="position:relative">${renderToStaticMarkup(
+      <ContextMenuBody kubi={live} name="kz-mgmt" />,
+    )}</div>
+    <div class="menu" style="position:relative">${renderToStaticMarkup(
+      <ContextMenuBody kubi={idle} name="prod-eu" />,
+    )}</div>
+    <div class="menu" style="position:relative">
+      <button>${icon} Logs</button>
+      <button>${icon} Exec</button>
+      <button>${icon} Port forward</button>
+      <button class="bad">${icon} Delete</button>
+    </div>
+  </div>`;
+};
+
 const css = readFileSync(join(__dirname, "..", "src", "styles.css"), "utf8");
 const page = (title: string, body: string, extra = "") => `<!doctype html>
 <html><head><meta charset="utf-8"><title>${title}</title>
@@ -269,6 +299,7 @@ const pages: [string, string, string?][] = [
   ["Overview screen", renderToStaticMarkup(<OverviewScreen kubi={kubiFor(tab("overview", null))} />)],
   ["Argo screen", renderToStaticMarkup(<ArgoScreen kubi={argoKubi()} />)],
   ["Spotlight", renderToStaticMarkup(<SearchModal kubi={kubiFor(tab("overview", null))} />)],
+  ["Menus — context and row", menus()],
   ["Settings", renderToStaticMarkup(<SettingsModal kubi={kubiFor(tab("overview", null))} />)],
   [
     "Settings — colors",

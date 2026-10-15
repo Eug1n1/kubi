@@ -7,7 +7,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { readGroupsFile, writeGroupsFile } from "./api";
-import { clusterColor, initials } from "./format";
+import { CLUSTER_COLORS, clusterColor, initials } from "./format";
 import type { ContextGroup, ContextInfo } from "./types";
 import type { Kubi } from "./useKubi";
 
@@ -403,6 +403,10 @@ export function ContextRail({ kubi }: { kubi: Kubi }) {
         className={item.name === kubi.context ? "chip active" : "chip"}
         title={item.cluster ? `${item.name}\n${item.cluster}` : item.name}
         onClick={() => kubi.switchContext(item.name)}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          kubi.openContextMenu(event.clientX, event.clientY, item.name);
+        }}
       >
         <i className="strip" style={{ background: clusterColor(item.name) }} />
         {initials(item.name)}
@@ -428,6 +432,10 @@ export function ContextRail({ kubi }: { kubi: Kubi }) {
           if (drop != null) commit(moveContext(layout, drop.token, drop.zone, drop.index));
         }}
         onPointerCancel={drag.cancel}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          kubi.openContextMenu(event.clientX, event.clientY, item.name);
+        }}
         onClick={(event) => {
           if (drag.swallow()) {
             event.preventDefault();
@@ -599,6 +607,8 @@ export function ContextRail({ kubi }: { kubi: Kubi }) {
         </div>
       </div>
 
+      {kubi.ctxMenu == null ? null : <ContextMenu kubi={kubi} />}
+
       {drag.live == null
         ? null
         : createPortal(
@@ -618,6 +628,113 @@ export function ContextRail({ kubi }: { kubi: Kubi }) {
             document.body,
           )}
     </aside>
+  );
+}
+
+/**
+ * What the menu holds: the cluster it belongs to, disconnect, and the palette.
+ * Split from the portal below so the visual harness can render it headlessly.
+ */
+export function ContextMenuBody({ kubi, name }: { kubi: Kubi; name: string }) {
+  const info = kubi.contexts.find((item) => item.name === name);
+  const live = kubi.connectedContexts.includes(name);
+  const picked = kubi.clusterColors[name] ?? null;
+  return (
+    <>
+      <div className="menu-head" title={info?.cluster ?? name}>
+        <i className="strip" style={{ background: clusterColor(name) }} />
+        <span className="name">{name}</span>
+        {live ? <span className="muted">connected</span> : null}
+      </div>
+      <button
+        disabled={!live}
+        title={live ? "Drop this cluster and close its tabs" : "Not connected in this window"}
+        onClick={() => kubi.disconnectContext(name)}
+      >
+        <PowerIcon /> Disconnect
+      </button>
+      <div className="menu-sep" />
+      <div className="menu-label">
+        <DotsIcon /> Colour
+      </div>
+      <div className="swatches">
+        {CLUSTER_COLORS.map((color) => (
+          <button
+            key={color}
+            className={color === picked ? "swatch on" : "swatch"}
+            style={{ background: color }}
+            title={color}
+            aria-label={`Colour ${color}`}
+            aria-pressed={color === picked}
+            onClick={() => kubi.setClusterColor(name, color)}
+          />
+        ))}
+        <button
+          className={picked == null ? "swatch auto on" : "swatch auto"}
+          title="Use the colour of the name"
+          aria-pressed={picked == null}
+          onClick={() => kubi.setClusterColor(name, null)}
+        >
+          auto
+        </button>
+      </div>
+    </>
+  );
+}
+
+/**
+ * Right-click menu on a context. Drawn through a portal, so the rail's own
+ * scrolling and dragging cannot clip it.
+ */
+function ContextMenu({ kubi }: { kubi: Kubi }) {
+  const menu = kubi.ctxMenu;
+  useEffect(() => {
+    if (menu == null) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") kubi.closeContextMenu();
+    };
+    const onMouse = () => kubi.closeContextMenu();
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onMouse);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onMouse);
+    };
+  }, [menu, kubi]);
+  if (menu == null) return null;
+  return createPortal(
+    <div
+      className="menu ctx-menu"
+      style={{
+        left: Math.min(menu.x, Math.max(8, window.innerWidth - 236)),
+        top: Math.min(menu.y, Math.max(8, window.innerHeight - 250)),
+      }}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <ContextMenuBody kubi={kubi} name={menu.name} />
+    </div>,
+    document.body,
+  );
+}
+
+/** Disconnect: the power symbol every other tool uses for it. */
+function PowerIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path d="M8 2.4v5.4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M4.5 4.5a5 5 0 1 0 7 0" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Colour: three dots, which is what a palette reads as at this size. */
+function DotsIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <circle cx="4.6" cy="8" r="1.7" fill="currentColor" />
+      <circle cx="8" cy="8" r="1.7" fill="currentColor" opacity="0.7" />
+      <circle cx="11.4" cy="8" r="1.7" fill="currentColor" opacity="0.45" />
+    </svg>
   );
 }
 

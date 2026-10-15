@@ -494,6 +494,11 @@ pub enum Command {
     Connect {
         context: String,
     },
+    /// Drops one cluster: its client, its watches and its live streams. Other
+    /// clusters in the window keep theirs.
+    Disconnect {
+        context: String,
+    },
     SetNamespace {
         /// Cluster the namespace belongs to; every command names its own, so one
         /// window can talk to several clusters at once.
@@ -626,6 +631,11 @@ pub enum AppEvent {
         context: String,
         namespaces: Vec<String>,
         default_namespace: Option<String>,
+    },
+    /// The cluster was dropped on request: the window closes what belonged to
+    /// it and can connect again by asking for it.
+    Disconnected {
+        context: String,
     },
     Error(String),
     Rows {
@@ -766,6 +776,20 @@ mod serde_tests {
         assert_eq!(
             serde_json::to_value(Command::StopLogs).unwrap(),
             serde_json::json!("stopLogs")
+        );
+        assert_eq!(
+            serde_json::to_value(Command::Disconnect {
+                context: "dev".into()
+            })
+            .unwrap(),
+            serde_json::json!({ "disconnect": { "context": "dev" } })
+        );
+        assert_eq!(
+            serde_json::to_value(AppEvent::Disconnected {
+                context: "dev".into()
+            })
+            .unwrap(),
+            serde_json::json!({ "disconnected": { "context": "dev" } })
         );
         let logs = Command::StartLogs {
             context: "dev".into(),

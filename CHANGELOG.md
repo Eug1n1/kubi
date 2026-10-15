@@ -56,6 +56,10 @@ shipped as.
   and shells running while you move between them. Every command names the
   context it works on, a tab is marked with its cluster's colour and name, and
   the rail shows which contexts have tabs open.
+- A right-click menu on a context: disconnect the cluster (its tabs close and
+  its streams stop, every other cluster keeps running) and pick the colour that
+  marks it, from a palette or back to the hue of its name. Picked colours are
+  remembered in the app's settings.
 
 ### Changed
 
@@ -76,6 +80,9 @@ shipped as.
 
 ### Fixed
 
+- A rule in the stylesheet lost its selector, which made the browser drop the
+  namespace dropdown and every menu drawn after it. Context menus and the row
+  menu now have the panel, hover and danger styles they were written for.
 - A pod that came up again no longer keeps warning markers that were only about
   probe failures.
 - The namespace hint stays visible once a spotlight fragment resolves to a
