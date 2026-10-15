@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Kubi } from "./useKubi";
-import type { ArgoApp, DataEntry, EventInfo, ObjectWarning, PodContainer, PodEnv, PodMount, PodSources, ResourceKind, ResourceRow } from "./types";
+import type { ArgoApp, CrTarget, DataEntry, EventInfo, ObjectWarning, PodContainer, PodEnv, PodMount, PodSources, ResourceKind, ResourceRow, View } from "./types";
 import { bindingKeys } from "./keymap";
 import {
   NAV,
@@ -201,17 +201,54 @@ function TabGhost({ live, className, label }: { live: DragLive; className: strin
   );
 }
 
-function Group({ title, count, indent = 0, children }: { title: string; count: number; indent?: number; children: ReactNode }) {
-  const [open, setOpen] = useState(true);
+function Group({
+  title,
+  count,
+  indent = 0,
+  top = false,
+  holds = false,
+  children,
+}: {
+  title: string;
+  count: number;
+  indent?: number;
+  /** Top-level sections are separated by a hairline. */
+  top?: boolean;
+  /** True while the view on screen lives inside this group. */
+  holds?: boolean;
+  children: ReactNode;
+}) {
+  // Closed at start: the sidebar opens as a list of sections, not a wall of
+  // resources. A view that is already open on the first render (or arrives
+  // later, from a tab, spotlight or another window) opens the group that holds
+  // it, and the user can close it again after that.
+  const [open, setOpen] = useState(holds);
+  useEffect(() => {
+    if (holds) setOpen(true);
+  }, [holds]);
   return (
     <div>
-      <button className="group" style={{ paddingLeft: 10 + indent }} onClick={() => setOpen((value) => !value)}>
+      <button
+        className={top ? "group top" : "group"}
+        style={{ paddingLeft: 10 + indent }}
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
         <i className={open ? "chevron" : "chevron closed"} />
         <span>{title}</span>
         <span className="muted">{count}</span>
       </button>
       {open ? <div className="children">{children}</div> : null}
     </div>
+  );
+}
+
+/** True when the view on screen is this custom resource. */
+function onCustomTarget(current: View | null, target: CrTarget): boolean {
+  return (
+    current?.kind === "custom" &&
+    current.target.name === target.name &&
+    current.target.version === target.version
   );
 }
 
@@ -272,7 +309,13 @@ export function Sidebar({ kubi }: { kubi: Kubi }) {
         const shown = title === "Gateway" ? gateway : kinds;
         if (title === "Gateway" && shown.length === 0) return null;
         return (
-          <Group key={title} title={title} count={shown.length}>
+          <Group
+            key={title}
+            title={title}
+            count={shown.length}
+            top
+            holds={current?.kind === "resource" && shown.includes(current.resource)}
+          >
             {shown.map((kind) => (
               <NavItem
                 key={kind}
@@ -284,19 +327,33 @@ export function Sidebar({ kubi }: { kubi: Kubi }) {
           </Group>
         );
       })}
-      <Group title="Custom Resources" count={1 + groups.reduce((sum, [, items]) => sum + items.length, 0)}>
+      <Group
+        title="Custom Resources"
+        count={1 + groups.reduce((sum, [, items]) => sum + items.length, 0)}
+        top
+        holds={
+          current?.kind === "custom" ||
+          (current?.kind === "resource" && current.resource === "customResourceDefinitions")
+        }
+      >
         <NavItem
           label="Definitions"
           active={current?.kind === "resource" && current.resource === "customResourceDefinitions"}
           onClick={() => kubi.openView({ kind: "resource", resource: "customResourceDefinitions" })}
         />
         {groups.map(([group, targets]) => (
-          <Group key={group} title={group} count={targets.length} indent={12}>
+          <Group
+            key={group}
+            title={group}
+            count={targets.length}
+            indent={12}
+            holds={targets.some((target) => onCustomTarget(current, target))}
+          >
             {targets.map((target) => (
               <NavItem
                 key={`${target.group}/${target.kind}/${target.version}`}
                 label={target.kind}
-                active={current?.kind === "custom" && current.target.name === target.name && current.target.version === target.version}
+                active={onCustomTarget(current, target)}
                 onClick={() => kubi.openView({ kind: "custom", target })}
               />
             ))}

@@ -449,14 +449,27 @@ h1 { font-size: 18px; font-weight: 600; margin: 0; }
 }
 .group {
   font-size: var(--fs-xs);
-  font-weight: 600;
-  letter-spacing: 0.06em;
+  font-weight: 700;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--dim);
-  padding: var(--sp2) 10px 4px;
+  color: var(--fg);
+  padding: var(--sp2) 10px 5px;
 }
-.group:hover { color: var(--muted); background: transparent; }
-.group .muted { margin-left: auto; letter-spacing: 0; text-transform: none; }
+/* A hairline between sections, so the eye lands on the title. */
+.group.top {
+  margin-top: var(--sp2);
+  padding-top: var(--sp3);
+  border-top: 1px solid var(--border);
+}
+.group:hover { color: var(--fg); background: var(--hover); }
+.group .muted {
+  margin-left: auto;
+  color: var(--dim);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
 .nav-item:hover { background: var(--hover); color: var(--fg); }
 .nav-item.active {
   background: var(--accent-soft);

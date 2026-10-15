@@ -252,6 +252,12 @@ const detail = (detailTab: Tab["detailTab"], width = 460) => {
   return renderToStaticMarkup(<Detail kubi={kubi} width={width} onWidth={noop} />);
 };
 
+/** The sidebar before anything is open: every section listed, none expanded. */
+const freshSidebar = () =>
+  renderToStaticMarkup(
+    <Sidebar kubi={{ ...kubiFor(tab("overview", null)), active: null, activeTab: null } as Kubi} />,
+  );
+
 /** The context menu in both states, next to the row menu that shares its styles. */
 const menus = () => {
   const base = kubiFor(tab("overview", null));
@@ -300,6 +306,7 @@ const pages: [string, string, string?][] = [
   ["Argo screen", renderToStaticMarkup(<ArgoScreen kubi={argoKubi()} />)],
   ["Spotlight", renderToStaticMarkup(<SearchModal kubi={kubiFor(tab("overview", null))} />)],
   ["Menus — context and row", menus()],
+  ["Sidebar — groups closed at start", freshSidebar()],
   ["Settings", renderToStaticMarkup(<SettingsModal kubi={kubiFor(tab("overview", null))} />)],
   [
     "Settings — colors",

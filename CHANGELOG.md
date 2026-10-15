@@ -63,6 +63,11 @@ shipped as.
 
 ### Changed
 
+- The sidebar opens with every resource group closed, and a group opens itself
+  when the view inside it is the one on screen, whether it came from a tab, from
+  spotlight or from another window. Group titles are brighter and bolder, with a
+  hairline between sections, so a collapsed sidebar still reads as a list of
+  what the cluster holds.
 - Panels resize: the detail panel stops short of the object list and is clamped
   back when the window shrinks, its tab strip scrolls sideways, each table in it
   scrolls on its own, and value cells keep room for 120 characters per line.
