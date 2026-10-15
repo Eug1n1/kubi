@@ -257,7 +257,7 @@ export function TopBar({ kubi }: { kubi: Kubi }) {
   return (
     <header className="topbar">
       <div className="topbar-row">
-        <svg className="brand" viewBox="0 0 20 20" width="20" height="20" aria-label="Kubi">
+        <svg className="brand" viewBox="0 0 20 20" width="40" height="40" aria-label="Kubi">
           <path d="M10 2 18 6 10 10 2 6 Z" fill="#3b82f6" />
           <path d="M18 6 18 14 10 18 10 10 Z" fill="#2563eb" />
           <path d="M2 6 2 14 10 18 10 10 Z" fill="#1d4ed8" />
