@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  dmg:
+    name: macOS bundle
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install JS dependencies
+        run: npm ci --prefix apps/desktop
+
+      # A tag builds the .app and the .dmg and opens a draft release with them.
+      # `app,dmg` together: a dmg-only run cleans up an `.app` it never wrote.
+      - name: Build and attach to a draft release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          args: --bundles app,dmg
+          tagName: ${{ github.ref_name }}
+          releaseName: Kubi ${{ github.ref_name }}
+          releaseDraft: true
+          prerelease: false
+
+      - name: Build only
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: apps/desktop
+          args: --bundles app,dmg
+
+      - name: Keep the dmg
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubi-dmg
+          path: target/release/bundle/dmg/*.dmg
+          if-no-files-found: error

@@ -10,7 +10,7 @@ BUNDLE_DMG := target/release/bundle/dmg
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install dev build dmg dmg-styled test clean distclean
+.PHONY: help install dev build dmg dmg-styled test preview clean distclean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -42,9 +42,13 @@ dmg-styled: | $(APP_DIR)/node_modules/.bin/tauri ## Build a .dmg with the Finder
 $(APP_DIR)/node_modules/.bin/tauri:
 	$(NPM) install
 
-test: ## Run Rust tests and build the frontend (tsc + vite)
-	cargo test --workspace
+test: ## Run the frontend build and the Rust tests
 	$(NPM) run build
+	cargo test --workspace
+
+preview: | $(APP_DIR)/node_modules/.bin/tauri ## Render the visual harness pages into apps/desktop/preview
+	cd $(APP_DIR) && npx esbuild preview/gallery.tsx --bundle --platform=node --format=cjs --outfile=preview/gallery.cjs
+	cd $(APP_DIR) && node preview/gallery.cjs
 
 clean: ## Remove build artifacts
 	cargo clean
