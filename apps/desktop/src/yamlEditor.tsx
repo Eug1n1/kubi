@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 
 /** One coloured piece of a line. `cls` is the class that carries its colour. */
 type Token = { text: string; cls: string };
@@ -95,6 +95,37 @@ function tokens(line: string): Token[] {
   return out;
 }
 
+/** Indent width, matching the `tab-size` of the editor. */
+const INDENT = "  ";
+
+/** Where the line that holds `at` begins. */
+function lineStart(value: string, at: number): number {
+  return value.lastIndexOf("\n", Math.max(0, at - 1)) + 1;
+}
+
+/** Adds or removes one indent on every line the range touches, and reports where
+ * the range lands afterwards. Null when nothing changed. */
+function shiftLines(value: string, from: number, to: number, add: boolean): { text: string; from: number; to: number } | null {
+  const first = lineStart(value, from);
+  // A range that ends at the start of a line does not touch that line.
+  const tail = to > from && value[to - 1] === "\n" ? to - 1 : to;
+  const last = lineStart(value, tail);
+  const stop = value.indexOf("\n", tail);
+  const block = value.slice(first, stop === -1 ? value.length : stop);
+  const lines = block.split("\n");
+  const shifted = lines.map((line) => (add ? INDENT + line : line.replace(/^ {1,2}/, "")));
+  const text = shifted.join("\n");
+  if (text === block) return null;
+  const deltas = lines.map((line, index) => (shifted[index] ?? "").length - line.length);
+  const head = deltas[0] ?? 0;
+  const total = deltas.reduce((sum, delta) => sum + delta, 0);
+  return {
+    text: value.slice(0, first) + text + value.slice(first + block.length),
+    from: from + head,
+    to: from === to ? from + head : lineStart(value, from) === last ? to + head : to + total,
+  };
+}
+
 /** Case-insensitive hits of `query`, as offsets into the document. */
 function findHits(value: string, query: string): Hit[] {
   if (query === "") return [];
@@ -149,6 +180,8 @@ export function YamlEditor({ value, onChange }: { value: string; onChange: (next
   const sheet = useRef<HTMLPreElement | null>(null);
   const gutter = useRef<HTMLDivElement | null>(null);
   const field = useRef<HTMLInputElement | null>(null);
+  /** Caret to restore after a Tab rewrites the document. */
+  const caret = useRef<[number, number] | null>(null);
   const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [at, setAt] = useState(0);
@@ -192,6 +225,33 @@ export function YamlEditor({ value, onChange }: { value: string; onChange: (next
   useEffect(() => {
     if (findOpen) field.current?.focus();
   }, [findOpen]);
+
+  // A rewritten document drops the selection, so put it back where it belongs.
+  useLayoutEffect(() => {
+    const box = area.current;
+    const next = caret.current;
+    if (!box || !next) return;
+    caret.current = null;
+    box.setSelectionRange(next[0], next[1]);
+  });
+
+  const onAreaKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Tab") return;
+    event.preventDefault();
+    const box = event.currentTarget;
+    const from = box.selectionStart;
+    const to = box.selectionEnd;
+    // A bare caret takes an indent where it stands; anything else shifts lines.
+    if (!event.shiftKey && from === to) {
+      caret.current = [from + INDENT.length, from + INDENT.length];
+      onChange(value.slice(0, from) + INDENT + value.slice(to));
+      return;
+    }
+    const shifted = shiftLines(value, from, to, !event.shiftKey);
+    if (!shifted) return;
+    caret.current = [shifted.from, shifted.to];
+    onChange(shifted.text);
+  };
 
   const step = (delta: number) => {
     setAt((index) => (hits.length === 0 ? 0 : (index + delta + hits.length) % hits.length));
@@ -265,6 +325,7 @@ export function YamlEditor({ value, onChange }: { value: string; onChange: (next
             value={value}
             spellCheck={false}
             onChange={(event) => onChange(event.target.value)}
+            onKeyDown={onAreaKeyDown}
             onScroll={sync}
           />
         </div>
