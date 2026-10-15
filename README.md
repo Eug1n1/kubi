@@ -59,6 +59,12 @@ end renders what it sends back. It runs on macOS, Windows and Linux.
 ## Requirements
 
 - macOS 11+, Windows 10+ or a Linux desktop with WebKitGTK 4.1.
+- macOS install note: the `.dmg` is unsigned (no Apple Developer ID yet), so
+  Gatekeeper refuses it with “damaged” after downloading. Clear the quarantine
+  flag and open it:
+  `xattr -d com.apple.quarantine ~/Downloads/Kubi_*.dmg` — or, if it is already
+  in Applications, `xattr -dr com.apple.quarantine /Applications/Kubi.app`.
+  Windows SmartScreen warns for the same reason.
 - Rust 1.95.0, pinned in `rust-toolchain.toml`.
 - Node 20 or newer (CI uses 22).
 - Build prerequisites: the Xcode Command Line Tools on macOS; on Linux
@@ -191,7 +197,9 @@ under the version when tagging.
 - Installers are configured per platform in `tauri.conf.json` and its
   `tauri.windows.conf.json` / `tauri.linux.conf.json` companions. Windows builds
   are unsigned, so SmartScreen will warn about them; macOS builds are unsigned
-  too unless the signing keys are provided.
+  too unless the signing keys are provided — Gatekeeper reports the downloaded
+  `.dmg` as “damaged”, which clears with
+  `xattr -d com.apple.quarantine ~/Downloads/Kubi_*.dmg` (see Requirements).
 
 ## License
 
