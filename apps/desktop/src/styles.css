@@ -779,16 +779,18 @@ th.num, td.num {
 }
 .yaml-editor:focus-within { border-color: var(--border-strong); }
 
-/* Find bar over the document. */
+/* Find bar over the document: a find row and, in replace mode, a second one. */
 .yaml-editor .find-bar {
   flex: none;
   display: flex;
-  align-items: center;
-  gap: var(--sp1);
+  flex-direction: column;
+  gap: 3px;
   padding: 3px var(--sp1) 3px var(--sp2);
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
 }
+.yaml-editor .find-row,
+.yaml-editor .replace-row { display: flex; align-items: center; gap: var(--sp1); }
 .yaml-editor .find-bar .find-input {
   flex: 1;
   min-width: 0;
@@ -806,6 +808,21 @@ th.num, td.num {
   font-variant-numeric: tabular-nums;
 }
 .yaml-editor .find-bar button { width: 22px; height: 22px; flex: none; }
+.yaml-editor .find-bar button.mode { font-family: var(--mono); font-size: var(--fs-xs); }
+.yaml-editor .find-bar button.on { background: var(--accent-soft); color: var(--fg); }
+.yaml-editor .find-bar button.text {
+  width: auto;
+  padding: 0 8px;
+  background: var(--field);
+  border: 1px solid var(--border);
+  font-size: var(--fs-xs);
+}
+.yaml-editor .find-bar button.text:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+.yaml-editor .find-bar button:disabled { opacity: 0.5; cursor: default; }
 
 .yaml-editor .editor-body { flex: 1; min-height: 0; display: flex; }
 .yaml-editor .gutter {
@@ -859,7 +876,7 @@ th.num, td.num {
 .yaml-editor .tg { color: var(--bad); }
 .yaml-editor .cm { color: var(--dim); font-style: italic; }
 .yaml-editor .pn { color: var(--muted); }
-.yaml-editor .hit { background: var(--accent-soft); border-radius: 2px; }
+.yaml-editor .hit { background: var(--accent-soft); }
 .yaml-editor .hit.on { background: var(--accent); color: var(--on-accent); }
 
 .detail-stack { display: flex; flex-direction: column; gap: var(--sp3); }

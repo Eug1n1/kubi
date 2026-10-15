@@ -126,13 +126,34 @@ function shiftLines(value: string, from: number, to: number, add: boolean): { te
   };
 }
 
-/** Case-insensitive hits of `query`, as offsets into the document. */
-function findHits(value: string, query: string): Hit[] {
-  if (query === "") return [];
-  const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+/** The query as a pattern: a plain, case-insensitive substring, or a regular
+ * expression when the user asks for one. Null while a regex does not parse. */
+function pattern(query: string, regex: boolean): RegExp | null {
+  if (query === "") return null;
+  try {
+    return regex ? new RegExp(query, "gim") : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  } catch {
+    return null;
+  }
+}
+
+/** Expands a replacement template against one match: `$1`, `$&` and `$<name>`. */
+function expand(match: RegExpExecArray, template: string): string {
+  return template.replace(/\$(?:([$&])|(\d{1,2})|<([A-Za-z_]\w*)>)/g, (whole, simple, index, name) => {
+    if (simple === "$") return "$";
+    if (simple === "&") return match[0];
+    if (index) return match[Number(index)] ?? "";
+    if (name) return match.groups?.[name] ?? "";
+    return whole;
+  });
+}
+
+/** Case-insensitive hits of a compiled pattern, as offsets into the document. */
+function findHits(value: string, expression: RegExp | null): Hit[] {
+  if (expression == null) return [];
   const hits: Hit[] = [];
-  for (const match of value.matchAll(pattern)) {
-    if (match.index != null) hits.push({ start: match.index, end: match.index + match[0].length });
+  for (const match of value.matchAll(expression)) {
+    if (match.index != null && match[0].length > 0) hits.push({ start: match.index, end: match.index + match[0].length });
   }
   return hits;
 }
@@ -184,6 +205,9 @@ export function YamlEditor({ value, onChange }: { value: string; onChange: (next
   const caret = useRef<[number, number] | null>(null);
   const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [replacement, setReplacement] = useState("");
+  const [regex, setRegex] = useState(false);
+  const [replaceOpen, setReplaceOpen] = useState(false);
   const [at, setAt] = useState(0);
 
   const lines = useMemo(() => value.split("\n"), [value]);
@@ -196,8 +220,10 @@ export function YamlEditor({ value, onChange }: { value: string; onChange: (next
     }
     return out;
   }, [lines]);
-  const hits = useMemo(() => findHits(value, query), [value, query]);
+  const expression = useMemo(() => pattern(query, regex), [query, regex]);
+  const hits = useMemo(() => findHits(value, expression), [value, expression]);
   const current = hits.length === 0 ? null : hits[Math.min(at, hits.length - 1)] ?? null;
+  const broken = query !== "" && expression == null;
 
   /** Paints the copy and the gutter from the textarea's own scroll position. */
   const sync = () => {
@@ -257,6 +283,25 @@ export function YamlEditor({ value, onChange }: { value: string; onChange: (next
     setAt((index) => (hits.length === 0 ? 0 : (index + delta + hits.length) % hits.length));
   };
 
+  /** Rewrites the active match, expanding `$1` style templates in regex mode. */
+  const replaceOne = () => {
+    if (current == null || expression == null) return;
+    let text = replacement;
+    if (regex) {
+      const probe = new RegExp(expression.source, expression.flags);
+      probe.lastIndex = current.start;
+      const match = probe.exec(value);
+      if (match?.index === current.start) text = expand(match, replacement);
+    }
+    onChange(value.slice(0, current.start) + text + value.slice(current.end));
+  };
+
+  const replaceEvery = () => {
+    if (expression == null || hits.length === 0) return;
+    const fresh = new RegExp(expression.source, expression.flags);
+    onChange(regex ? value.replace(fresh, replacement) : value.replace(fresh, () => replacement));
+  };
+
   const onKeyDown = (event: ReactKeyboardEvent) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
       event.preventDefault();
@@ -274,34 +319,95 @@ export function YamlEditor({ value, onChange }: { value: string; onChange: (next
     }
   };
 
-  const shown = query === "" ? "" : hits.length === 0 ? "no matches" : `${(current ? hits.indexOf(current) : 0) + 1}/${hits.length}`;
+  const onReplaceKey = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setFindOpen(false);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      replaceOne();
+    }
+  };
+
+  const shown =
+    query === "" ? "" : broken ? "bad pattern" : hits.length === 0 ? "no matches" : `${(current ? hits.indexOf(current) : 0) + 1}/${hits.length}`;
 
   return (
     <div className="yaml-editor" onKeyDown={onKeyDown}>
       {findOpen ? (
         <div className="find-bar">
-          <input
-            ref={field}
-            className="find-input"
-            value={query}
-            placeholder="Find in manifest"
-            spellCheck={false}
-            onChange={(event) => {
-              setQuery(event.target.value);
-              setAt(0);
-            }}
-            onKeyDown={onFindKey}
-          />
-          <span className="find-count">{shown}</span>
-          <button className="icon" title="Previous match" aria-label="Previous match" onClick={() => step(-1)}>
-            <ChevronIcon up />
-          </button>
-          <button className="icon" title="Next match" aria-label="Next match" onClick={() => step(1)}>
-            <ChevronIcon />
-          </button>
-          <button className="icon" title="Close find" aria-label="Close find" onClick={() => setFindOpen(false)}>
-            ×
-          </button>
+          <div className="find-row">
+            <input
+              ref={field}
+              className="find-input"
+              value={query}
+              placeholder={regex ? "Find with a regex" : "Find in manifest"}
+              spellCheck={false}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setAt(0);
+              }}
+              onKeyDown={onFindKey}
+            />
+            <span className="find-count">{shown}</span>
+            <button
+              className={regex ? "icon mode on" : "icon mode"}
+              title="Regular expression"
+              aria-label="Regular expression"
+              aria-pressed={regex}
+              onClick={() => setRegex((on) => !on)}
+            >
+              .*
+            </button>
+            <button
+              className={replaceOpen ? "icon on" : "icon"}
+              title="Replace"
+              aria-label="Replace"
+              aria-pressed={replaceOpen}
+              onClick={() => setReplaceOpen((on) => !on)}
+            >
+              <SwapIcon />
+            </button>
+            <button className="icon" title="Previous match" aria-label="Previous match" onClick={() => step(-1)}>
+              <ChevronIcon up />
+            </button>
+            <button className="icon" title="Next match" aria-label="Next match" onClick={() => step(1)}>
+              <ChevronIcon />
+            </button>
+            <button className="icon" title="Close find" aria-label="Close find" onClick={() => setFindOpen(false)}>
+              ×
+            </button>
+          </div>
+          {replaceOpen ? (
+            <div className="replace-row">
+              <input
+                className="find-input"
+                value={replacement}
+                placeholder={regex ? "Replace with, $1 allowed" : "Replace with"}
+                spellCheck={false}
+                onChange={(event) => setReplacement(event.target.value)}
+                onKeyDown={onReplaceKey}
+              />
+              <button
+                className="icon text"
+                title="Replace this match"
+                aria-label="Replace this match"
+                disabled={current == null}
+                onClick={replaceOne}
+              >
+                Replace
+              </button>
+              <button
+                className="icon text"
+                title="Replace every match"
+                aria-label="Replace every match"
+                disabled={hits.length === 0}
+                onClick={replaceEvery}
+              >
+                All
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
       <div className="editor-body">
@@ -331,6 +437,29 @@ export function YamlEditor({ value, onChange }: { value: string; onChange: (next
         </div>
       </div>
     </div>
+  );
+}
+
+function SwapIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <path
+        d="M3 5.5h9M9.5 3 12 5.5 9.5 8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M13 10.5H4M6.5 8 4 10.5 6.5 13"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
