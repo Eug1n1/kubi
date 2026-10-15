@@ -1739,8 +1739,16 @@ input.color-swatch::-webkit-color-swatch { border: 0; border-radius: 2px; }
 .theme-save { display: flex; gap: var(--sp1); margin-top: var(--sp2); }
 .theme-save input { flex: 1; min-width: 0; }
 
+/* Load theme… and its note, between the mode toggle and the Base section. */
+.theme-load {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp2);
+  margin-top: var(--sp3);
+}
 /* A note under the theme list: what the last theme action did or refused. */
-.theme-note { margin: var(--sp2) 0 0; color: var(--muted); font-size: var(--fs-xs); }
+.theme-note { margin: 0; color: var(--muted); font-size: var(--fs-xs); }
 .theme-note.bad { color: var(--bad-fg); }
 
 .binding {

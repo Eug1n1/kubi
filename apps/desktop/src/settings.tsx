@@ -271,6 +271,14 @@ export function Colors({ kubi }: { kubi: Kubi }) {
           </button>
         ))}
       </div>
+      <div className="theme-load">
+        <button className="create" onClick={() => void kubi.loadThemeFromFile()}>
+          Load theme…
+        </button>
+        {kubi.themeNote == null ? null : (
+          <p className={kubi.themeNote.kind === "bad" ? "theme-note bad" : "theme-note"}>{kubi.themeNote.text}</p>
+        )}
+      </div>
       <h3>Base</h3>
       <ColorField
         label="Background"
@@ -288,13 +296,7 @@ export function Colors({ kubi }: { kubi: Kubi }) {
       <ColorField label="Healthy" hint="ok status, healthy state" value={theme.ok} onChange={(ok) => kubi.updateTheme({ ok })} />
       <ColorField label="Warning" hint="warnings and probe noise" value={theme.warn} onChange={(warn) => kubi.updateTheme({ warn })} />
       <ColorField label="Failure" hint="errors and destructive actions" value={theme.bad} onChange={(bad) => kubi.updateTheme({ bad })} />
-      {kubi.themeNote == null ? null : (
-        <p className={kubi.themeNote.kind === "bad" ? "theme-note bad" : "theme-note"}>{kubi.themeNote.text}</p>
-      )}
       <div className="binding-footer">
-        <button className="ghost" onClick={() => void kubi.loadThemeFromFile()}>
-          Load theme…
-        </button>
         <button className="ghost" onClick={kubi.resetTheme}>
           Reset colors
         </button>
