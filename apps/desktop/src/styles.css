@@ -1672,17 +1672,6 @@ th.num, td.num {
   color: var(--muted);
 }
 /* Color controls in Settings. */
-.theme-mode {
-  display: inline-flex;
-  gap: 2px;
-  padding: 2px;
-  background: var(--field);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  margin-bottom: var(--sp2);
-}
-.theme-mode button { padding: 4px 12px; border-radius: var(--r-sm); color: var(--muted); font-size: var(--fs-sm); }
-.theme-mode button.on { background: var(--selected); color: var(--fg); font-weight: 600; }
 .color-field {
   display: flex;
   align-items: center;

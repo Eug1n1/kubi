@@ -259,18 +259,6 @@ export function Colors({ kubi }: { kubi: Kubi }) {
           Save theme
         </button>
       </div>
-      <div className="theme-mode" role="group" aria-label="Theme mode">
-        {(["dark", "light"] as const).map((mode) => (
-          <button
-            key={mode}
-            className={theme.mode === mode ? "on" : ""}
-            aria-pressed={theme.mode === mode}
-            onClick={() => kubi.updateTheme({ mode })}
-          >
-            {mode === "dark" ? "Dark" : "Light"}
-          </button>
-        ))}
-      </div>
       <div className="theme-load">
         <button className="create" onClick={() => void kubi.loadThemeFromFile()}>
           Load theme…
