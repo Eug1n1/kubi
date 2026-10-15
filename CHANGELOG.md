@@ -35,7 +35,9 @@ shipped as.
   anything, and says exactly what was wrong when it refuses. The document is
   documented in the README with a ready-made example in `themes/example.json`,
   and a name the list already holds is replaced with a note saying so.
-- Browse a cluster: Cluster (nodes, namespaces, events), Workloads (pods,
+- The Dark / Light toggle in Settings → Colors is removed: it now switches by
+  picking a theme from the list, and **Load theme…** sits above the Base colors
+  with the accent button style instead of the old segmented control.
   deployments, replica sets, stateful sets, daemon sets, jobs, cron jobs),
   Network (services, endpoints, endpoint slices, ingresses, ingress classes,
   network policies), Config (config maps, secrets, resource quotas, limit
