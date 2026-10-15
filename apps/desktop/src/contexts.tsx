@@ -456,7 +456,12 @@ export function ContextRail({ kubi }: { kubi: Kubi }) {
 
   return (
     <aside
-      className={["hotbar", drag.dragging ? "open" : ""].filter(Boolean).join(" ")}
+      // The panel follows the pointer, but a right-click menu is drawn at the
+      // cursor, outside the rail: while one is open the list stays put, so the
+      // context the menu belongs to does not slide away under it.
+      className={["hotbar", drag.dragging || kubi.ctxMenu != null ? "open" : ""]
+        .filter(Boolean)
+        .join(" ")}
       aria-label="Contexts"
     >
       <div className="chips">

@@ -85,6 +85,9 @@ shipped as.
 
 ### Fixed
 
+- The context list no longer slides shut under an open context menu: the menu
+  is drawn at the cursor, outside the rail, so moving the pointer onto it used
+  to collapse the very list the menu belongs to.
 - Hovering or pressing a tab lights the whole tab, close spot included, instead
   of a patch over the label while the rest of the strip stayed dark. The strip
   is the only thing that paints a tab now, so its buttons stay transparent; the
