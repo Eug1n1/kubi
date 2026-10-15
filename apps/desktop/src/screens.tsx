@@ -28,6 +28,7 @@ import {
   type SearchHit,
 } from "./catalog";
 import { columnKey, columnsFor, compareRows, fieldText, isNumericField, type Field } from "./columns";
+import { YamlEditor } from "./yamlEditor";
 import { clusterColor, formatAge, formatBytes, formatBytesPair, formatCpu, formatCpuPair, liveAge, previewValue } from "./format";
 import { objectTemplate } from "./templates";
 import { ExecPane } from "./execWindow";
@@ -2212,7 +2213,7 @@ function YamlTab({ kubi, secret, ready, yaml }: { kubi: Kubi; secret: boolean; r
             {masked ? <span className="muted">Show secret values before patching.</span> : null}
           </div>
           {kubi.patchError ? <p className="bad wrap">{kubi.patchError}</p> : null}
-          <textarea className="yaml" value={draft} spellCheck={false} onChange={(event) => setDraft(event.target.value)} />
+          <YamlEditor value={draft} onChange={setDraft} />
         </>
       ) : null}
     </div>
