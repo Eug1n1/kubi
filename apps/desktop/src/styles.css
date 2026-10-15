@@ -517,6 +517,15 @@ h1 { font-size: 18px; font-weight: 600; margin: 0; }
 .tab button.drag:active, .log-tab button.drag:active { cursor: grabbing; }
 .tab .x { padding: 0 4px; color: var(--dim); border-radius: var(--r-sm); }
 .tab .x:hover { color: var(--fg); background: var(--hover); }
+/* Context colour on a tab: the same strip the rail draws next to the context. */
+.tab .tab-context {
+  display: inline-block;
+  width: 3px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 2px;
+  vertical-align: -1px;
+}
 /* Cluster badge on a tab, shown once tabs of several clusters are open. */
 .tab .tab-cluster {
   max-width: 84px;

@@ -51,6 +51,11 @@ shipped as.
 - Windows and Linux support: the shell has no platform-specific code, the
   bundler produces `.msi`/`.exe` on Windows and `.deb`/AppImage on Linux next to
   the macOS `.dmg`, and CI builds and tests on all three.
+- Several clusters at once: tabs are bound to a cluster, so one window can hold
+  tabs of different clusters and keep their watches, log streams, port forwards
+  and shells running while you move between them. Every command names the
+  context it works on, a tab is marked with its cluster's colour and name, and
+  the rail shows which contexts have tabs open.
 
 ### Changed
 

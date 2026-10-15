@@ -492,8 +492,11 @@ export function ResourceScreen({ kubi }: { kubi: Kubi }) {
                 kubi.focusTab(index);
               }}
             >
+              {/* The rail marks a context with a coloured strip; a tab carries
+                  the same colour, so its cluster is readable at a glance. */}
+              <i className="tab-context" style={{ background: clusterColor(item.context) }} />
               {viewTitle(item.view)}
-              {/* Which cluster a tab belongs to only matters once there are two. */}
+              {/* The name only earns its place once tabs of several clusters are open. */}
               {kubi.clustered ? <span className="tab-cluster">{item.context}</span> : null}
             </button>
             <button
