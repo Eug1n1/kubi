@@ -9,3 +9,9 @@ apps/desktop/preview/*.cjs
 apps/desktop/preview/*.css
 apps/desktop/preview/*.html
 apps/desktop/preview/shots-*/
+
+# Local agent tooling: skills and editor configuration
+.agents/
+.cursor/
+skills-lock.json
+.aider.conf.yml
