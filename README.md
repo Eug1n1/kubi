@@ -124,6 +124,9 @@ git tag v0.1.0 && git push origin v0.1.0
 Run it from the Actions tab without a tag to only check that the bundle builds
 and to keep the dmg as a workflow artifact.
 
+[`CHANGELOG.md`](CHANGELOG.md) holds what shipped; move the `Unreleased` entries
+under the version when tagging.
+
 ## Notes
 
 - Secret values arrive with a `masked` flag and stay hidden behind dots until the
