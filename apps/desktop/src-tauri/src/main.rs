@@ -6,7 +6,13 @@ use tauri::{Emitter, Manager};
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            // The updater is desktop-only: it ships no mobile code and its
+            // target detection assumes a desktop bundle layout.
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             let handle = app.handle().clone();
             let core = CoreHandle::spawn();
             app.manage(core.command_sender());

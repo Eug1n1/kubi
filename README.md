@@ -52,6 +52,9 @@ end renders what it sends back. It runs on macOS, Windows and Linux.
   with light and dark modes plus named themes — the shipped pair and any you
   name yourself; contrast for accents and filled buttons is computed rather
   than eyeballed.
+- In-place updates: Settings → About shows the running version and checks the
+  stable releases for a newer one. A download installs on restart after asking;
+  dev builds point at the releases page instead.
 
 ## Requirements
 

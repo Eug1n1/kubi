@@ -23,3 +23,13 @@ _Avoid_: separate window, detached window (that is a different thing)
 A log or exec dock pane moved into its own window; it keeps running when the
 owning window moves to another cluster.
 _Avoid_: context window, separate window
+
+**Update**:
+An in-place replacement of the installed app through the updater with a
+restart — not downloading an installer by hand, and not refreshing cluster data.
+_Avoid_: upgrade (means the same thing; Update is the word the UI uses)
+
+**About**:
+The Settings tab that shows the running version, the update status, and the
+Check for updates action.
+_Avoid_: updates tab, version page

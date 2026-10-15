@@ -11,6 +11,13 @@ shipped as.
 
 ## [Unreleased]
 
+### Added
+
+- In-place app updates: Settings → About shows the running version, checks the
+  stable releases for a newer one, downloads it with progress, and restarts to
+  install after asking. Dev builds and machines without network get an
+  explanation with a link to the releases page instead.
+
 ## [0.2.0] - 2026-10-15
 
 ### Added

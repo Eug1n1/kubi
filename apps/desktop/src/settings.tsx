@@ -1,3 +1,8 @@
+import { getVersion } from "@tauri-apps/api/app";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check } from "@tauri-apps/plugin-updater";
 import { useEffect, useRef, useState } from "react";
 import {
   KEYMAP_ROWS,
@@ -15,12 +20,54 @@ import type { Kubi } from "./useKubi";
 const SETTINGS_TABS: [string, string][] = [
   ["keybindings", "Keybindings"],
   ["colors", "Colors"],
+  ["about", "About"],
 ];
+
+/** Where installers and the update feed live when the in-place flow cannot run. */
+const RELEASES_URL = "https://github.com/Eug1n1/kubi/releases";
+const CHANGELOG_URL = "https://github.com/Eug1n1/kubi/blob/main/CHANGELOG.md";
+
+/** The one-key status of the About tab: idle, busy on check or download, or settled. */
+export type AboutStatus =
+  | { kind: "idle" }
+  | { kind: "checking" }
+  | { kind: "uptodate" }
+  | { kind: "available"; version: string }
+  | { kind: "downloading"; version: string; done: number; total: number | null }
+  | { kind: "ready"; version: string }
+  | { kind: "failed"; message: string };
+
+/** Props the harness feeds the About screen so every state screenshots without a backend. */
+export interface AboutProps {
+  version: string;
+  status: AboutStatus;
+  onCheck: () => void;
+  onDownload: () => void;
+  onRestart: () => void;
+}
+
+/** A network or backend failure rewritten so a user can act on it. */
+export function humanUpdateError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err ?? "");
+  console.error("update failed:", err);
+  if (/updater is not configured|not supported|target/i.test(raw))
+    return "Updates are available in the installed app only. Grab the installer from the releases page.";
+  if (/network|fetch|failed to fetch|econn|timeout|offline|dns|ENOTFOUND|502|503/i.test(raw))
+    return "Could not reach the releases page. Check the connection and try again.";
+  if (/signature|public key|pubkey/i.test(raw))
+    return "The update signature did not verify. Grab the installer from the releases page.";
+  if (/no update|not found|404/i.test(raw))
+    return "No update artifact was published for this system. Grab the installer from the releases page.";
+  return "The update check failed. Try again, or grab the installer from the releases page.";
+}
 
 export function SettingsModal({ kubi }: { kubi: Kubi }) {
   const [tab, setTab] = useState("keybindings");
   const [recording, setRecording] = useState<KeymapAction | null>(null);
   const recorder = useRef<HTMLButtonElement>(null);
+  // About state lives here, not in the tab: switching tabs unmounts the tab
+  // body, and unmounting must not drop a downloaded update or its status.
+  const about = useAbout();
 
   useEffect(() => {
     if (recording != null) recorder.current?.focus();
@@ -63,6 +110,15 @@ export function SettingsModal({ kubi }: { kubi: Kubi }) {
               <Keybindings kubi={kubi} recording={recording} onRecord={setRecording} recorder={recorder} />
             ) : null}
             {tab === "colors" ? <Colors kubi={kubi} /> : null}
+            {tab === "about" ? (
+              <About
+                version={about.version}
+                status={about.status}
+                onCheck={about.onCheck}
+                onDownload={about.onDownload}
+                onRestart={about.onRestart}
+              />
+            ) : null}
           </div>
         </div>
       </div>
@@ -299,5 +355,170 @@ function ResetIcon() {
       <path d="M3.5 8a4.5 4.5 0 1 0 1.2-3.1" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
       <path d="M3.4 2.8v2.7h2.7" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
+  );
+}
+
+/** Settings → About: the running version, the manual update check, and the docs links. */
+function useAbout() {
+  const [version, setVersion] = useState("…");
+  const [status, setStatus] = useState<AboutStatus>({ kind: "idle" });
+  // The pending Update from the last check; download/install continue from it.
+  // check() hands out a backend resource, so a newer check closes the older one.
+  // The ref (and the status) live as long as the modal, so switching tabs
+  // cannot orphan a downloaded update; only closing Settings releases it.
+  const pending = useRef<Awaited<ReturnType<typeof check>> | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    getVersion()
+      .then((v) => {
+        if (live) setVersion(v);
+      })
+      .catch(() => {
+        if (live) setVersion("unknown");
+      });
+    return () => {
+      live = false;
+      void pending.current?.close().catch(() => {});
+      pending.current = null;
+    };
+  }, []);
+
+  const onCheck = async () => {
+    if (status.kind === "checking" || status.kind === "downloading") return;
+    setStatus({ kind: "checking" });
+    try {
+      const next = await check();
+      await pending.current?.close().catch(() => {});
+      pending.current = next;
+      if (next == null) {
+        setStatus({ kind: "uptodate" });
+        return;
+      }
+      setStatus({ kind: "available", version: next.version });
+    } catch (err) {
+      await pending.current?.close().catch(() => {});
+      pending.current = null;
+      setStatus({ kind: "failed", message: humanUpdateError(err) });
+    }
+  };
+
+  const onDownload = async () => {
+    const update = pending.current;
+    if (update == null || status.kind !== "available") return;
+    const version = update.version;
+    setStatus({ kind: "downloading", version, done: 0, total: null });
+    try {
+      let done = 0;
+      let total: number | null = null;
+      await update.download((event) => {
+        if (event.event === "Started") total = event.data.contentLength ?? null;
+        else if (event.event === "Progress") done += event.data.chunkLength;
+        setStatus({ kind: "downloading", version, done, total });
+      });
+      setStatus({ kind: "ready", version });
+      const restart = await ask(`Update ${version} downloaded. Restart now to install?`, {
+        title: "Kubi update",
+        kind: "info",
+        okLabel: "Restart now",
+        cancelLabel: "Later",
+      });
+      if (restart) await onRestart();
+    } catch (err) {
+      setStatus({ kind: "failed", message: humanUpdateError(err) });
+    }
+  };
+
+  const onRestart = async () => {
+    const update = pending.current;
+    if (update == null) return;
+    try {
+      await update.install();
+      pending.current = null;
+      // macOS/Linux relaunch after install; on Windows the installer already
+      // restarted the app, so a second relaunch is harmless.
+      await relaunch();
+    } catch (err) {
+      setStatus({ kind: "failed", message: humanUpdateError(err) });
+    }
+  };
+
+  const run = (fn: () => Promise<void>) => () => void fn();
+  return { version, status, onCheck: run(onCheck), onDownload: run(onDownload), onRestart: run(onRestart) };
+}
+
+/** The pure About screen: every state renders from props, so the harness can drive it. */
+export function About({ version, status, onCheck, onDownload, onRestart }: AboutProps) {
+  const busy = status.kind === "checking" || status.kind === "downloading";
+  const open = (url: string) => () => void openUrl(url).catch((err) => console.error("open link:", err));
+  return (
+    <>
+      <p className="muted">Kubi {version}</p>
+      <UpdateStatus status={status} />
+      {status.kind === "downloading" ? <UpdateProgress status={status} /> : null}
+      <div className="binding-footer">
+        <button className="create" disabled={busy} onClick={onCheck}>
+          {status.kind === "checking" ? "Checking…" : "Check for updates"}
+        </button>
+      </div>
+      {status.kind === "available" ? (
+        <p>
+          <button className="ghost" onClick={onDownload}>
+            Download &amp; install update {status.version}
+          </button>
+        </p>
+      ) : null}
+      {status.kind === "ready" ? (
+        <p>
+          <button className="ghost" onClick={onRestart}>
+            Restart now to install
+          </button>
+        </p>
+      ) : null}
+      {status.kind === "failed" ? (
+        <p>
+          <button className="ghost" onClick={open(RELEASES_URL)}>
+            Open releases page
+          </button>
+        </p>
+      ) : null}
+      <p className="muted">
+        <button className="ghost" onClick={open(CHANGELOG_URL)}>
+          See what&apos;s new
+        </button>{" "}
+        <button className="ghost" onClick={open(RELEASES_URL)}>
+          Releases
+        </button>
+      </p>
+    </>
+  );
+}
+
+function UpdateStatus({ status }: { status: AboutStatus }) {
+  switch (status.kind) {
+    case "idle":
+      return <p className="muted">Not checked yet.</p>;
+    case "checking":
+      return <p className="muted">Checking for updates…</p>;
+    case "uptodate":
+      return <p>You&apos;re up to date.</p>;
+    case "available":
+      return <p>Update {status.version} available.</p>;
+    case "downloading":
+      return <p className="muted">Downloading update {status.version}…</p>;
+    case "ready":
+      return <p>Update {status.version} ready. Restart to apply it.</p>;
+    case "failed":
+      return <p className="theme-note bad">{status.message}</p>;
+  }
+}
+
+function UpdateProgress({ status }: { status: Extract<AboutStatus, { kind: "downloading" }> }) {
+  if (status.total == null) return <p className="muted">{Math.round(status.done / 1024)} KB downloaded…</p>;
+  const pct = Math.min(100, Math.round((status.done / status.total) * 100));
+  return (
+    <p className="muted" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+      Downloading… {pct}%
+    </p>
   );
 }

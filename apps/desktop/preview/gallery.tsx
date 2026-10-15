@@ -7,7 +7,7 @@ import { writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ContextMenuBody, ContextRail } from "../src/contexts";
-import { Colors, SettingsModal } from "../src/settings";
+import { About, Colors, SettingsModal, type AboutStatus } from "../src/settings";
 import { LogPane } from "../src/logWindow";
 import { ArgoScreen, Detail, OverviewScreen, PinnedSplash, ResourceScreen, RowMenu, SearchModal, Sidebar, TopBar } from "../src/screens";
 import { DEFAULT_KEYMAP } from "../src/keymap";
@@ -274,6 +274,27 @@ const detail = (detailTab: Tab["detailTab"], width = 460) => {
   return renderToStaticMarkup(<Detail kubi={kubi} width={width} onWidth={noop} />);
 };
 
+/** Every About state side by side: idle, busy, settled, and failed. */
+const aboutStates = (): string => {
+  const states: [string, AboutStatus][] = [
+    ["Not checked yet", { kind: "idle" }],
+    ["Checking", { kind: "checking" }],
+    ["Up to date", { kind: "uptodate" }],
+    ["Available", { kind: "available", version: "0.3.0" }],
+    ["Downloading", { kind: "downloading", version: "0.3.0", done: 4_194_304, total: 12_582_912 }],
+    ["Ready", { kind: "ready", version: "0.3.0" }],
+    ["Failed", { kind: "failed", message: "Could not reach the releases page. Check the connection and try again." }],
+  ];
+  return `<div class="pv-side">${states
+    .map(
+      ([label, status]) =>
+        `<section class="pv"><h3>${label}</h3><div class="settings-body" style="max-height:none">${renderToStaticMarkup(
+          <About version="0.2.0" status={status} onCheck={noop} onDownload={noop} onRestart={noop} />,
+        )}</div></section>`,
+    )
+    .join("")}</div>`;
+};
+
 /** The sidebar before anything is open: every section listed, none expanded. */
 const freshSidebar = () =>
   renderToStaticMarkup(
@@ -343,6 +364,7 @@ const pages: [string, string, string?][] = [
     )}</div>`,
   ],
   ["Sidebar — groups closed at start", freshSidebar()],
+  ["Settings — about, every state", aboutStates()],
   ["Settings", renderToStaticMarkup(<SettingsModal kubi={kubiFor(tab("overview", null))} />)],
   [
     "Settings — colors",

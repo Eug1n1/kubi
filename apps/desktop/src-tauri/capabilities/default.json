@@ -7,6 +7,9 @@
     "core:webview:allow-create-webview-window",
     "core:window:allow-close",
     "core:window:allow-set-focus",
-    "dialog:default"
+    "dialog:default",
+    "opener:default",
+    "process:default",
+    "updater:default"
   ]
 }
