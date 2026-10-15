@@ -522,16 +522,31 @@ h1 { font-size: 18px; font-weight: 600; margin: 0; }
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
   padding: 0 2px;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
 }
 .tab, .log-tab { position: relative; }
-.tab:hover { color: var(--fg); background: var(--hover); }
+/* Hover is spelled out for the active tab too: `.tab.active` below has the
+   same specificity and comes later, so it would win and keep the strip dark,
+   while the label button lights up on its own through the global
+   `button:hover` — the close button spot then reads as a hole in the tab. */
+.tab:hover, .tab.active:hover { color: var(--fg); background: var(--hover); }
+/* The pressed state is carried by the strip the same way: the global
+   `button:active` would light the label button alone and leave the rest of
+   the tab — the close button spot included — in the hover colour. */
+.tab:active, .tab.active:active { background: var(--selected); }
 .tab.active { color: var(--fg); border-bottom-color: var(--accent); background: var(--bg); }
-.tab.shift, .log-tab.shift { transition: transform 160ms ease; }
+.tab.shift, .log-tab.shift { transition: transform 160ms ease, background var(--t-fast), color var(--t-fast), border-color var(--t-fast); }
 .tab.dragging, .log-tab.dragging { pointer-events: none; }
+/* The strip is the only thing that paints a tab: its buttons stay
+   transparent, so the global button hover and press backgrounds cannot
+   animate out of step with the strip and read as a patch of a different
+   object riding on top of it. The rule sits below those globals on
+   purpose — same specificity, later wins. */
+.tab button, .log-tab button { background: transparent; }
 .tab button.drag, .log-tab button.drag { cursor: grab; padding: 9px 6px; }
 .tab button.drag:active, .log-tab button.drag:active { cursor: grabbing; }
 .tab .x { padding: 0 4px; color: var(--dim); border-radius: var(--r-sm); }
-.tab .x:hover { color: var(--fg); background: var(--hover); }
+.tab .x:hover { color: var(--fg); }
 /* Context colour on a tab: the same strip the rail draws next to the context. */
 .tab .tab-context {
   display: inline-block;
@@ -1327,11 +1342,17 @@ th.num, td.num {
   font-size: var(--fs-sm);
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
 }
-.log-tab:hover { color: var(--fg); background: var(--hover); }
+/* Same as the tab strip: the active log tab carries the hover state
+   explicitly, or `.log-tab.active` below wins the cascade and the close
+   spot stays dark while the rest of the tab lights up. */
+.log-tab:hover, .log-tab.active:hover { color: var(--fg); background: var(--hover); }
+/* The whole log tab reads as one pressed thing, not just its label button. */
+.log-tab:active, .log-tab.active:active { background: var(--selected); }
 .log-tab.active { color: var(--fg); border-bottom-color: var(--accent); background: var(--bg); }
 .log-tab .x { padding: 0 4px; color: var(--dim); }
-.log-tab .x:hover { color: var(--fg); background: var(--hover); }
+.log-tab .x:hover { color: var(--fg); }
 .log-drawer header {
   flex: none;
   display: flex;

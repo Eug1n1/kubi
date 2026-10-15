@@ -85,6 +85,10 @@ shipped as.
 
 ### Fixed
 
+- Hovering or pressing a tab lights the whole tab, close spot included, instead
+  of a patch over the label while the rest of the strip stayed dark. The strip
+  is the only thing that paints a tab now, so its buttons stay transparent; the
+  same for the tabs of the log drawer.
 - A rule in the stylesheet lost its selector, which made the browser drop the
   namespace dropdown and every menu drawn after it. Context menus and the row
   menu now have the panel, hover and danger styles they were written for.
