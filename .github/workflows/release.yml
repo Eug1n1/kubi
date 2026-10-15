@@ -37,8 +37,8 @@ jobs:
 
       # No bundle list is passed on purpose: each platform reads its own
       # tauri.conf.json companions, so the installers stay defined in one place.
-      # A tag builds them and opens a draft release with all of them attached.
-      - name: Build and attach to a draft release
+      # A tag builds them and publishes a release with all of them attached.
+      - name: Build and publish the release
         if: startsWith(github.ref, 'refs/tags/')
         uses: tauri-apps/tauri-action@v0
         env:
@@ -47,7 +47,11 @@ jobs:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
           releaseName: Kubi ${{ github.ref_name }}
-          releaseDraft: true
+          releaseBody: |
+            Installers for macOS, Windows and Linux are attached below.
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for what changed.
+          releaseDraft: false
           prerelease: false
 
       - name: Build only

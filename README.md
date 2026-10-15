@@ -126,8 +126,7 @@ The generated pages are ignored by git.
 
 `.github/workflows/ci.yml` builds the front end and runs the Rust tests on every
 push and pull request, on macOS, Linux and Windows. `.github/workflows/release.yml`
-builds the installers for all three on a tag and opens one draft release with
-them attached:
+builds the installers for all three on a tag and publishes them as one release:
 
 ```sh
 git tag v0.1.0 && git push origin v0.1.0

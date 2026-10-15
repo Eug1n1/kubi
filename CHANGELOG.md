@@ -5,8 +5,9 @@ All notable changes to Kubi are documented here. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 The `Unreleased` section holds what is on `main` but not in a release yet; on a
-`v*` tag the release workflow opens a draft release with the `.app` and the
-`.dmg`, and the section moves under the version it shipped as.
+`v*` tag the release workflow builds the installers for macOS, Windows and Linux
+and publishes them as one release, and the section moves under the version it
+shipped as.
 
 ## [Unreleased]
 
