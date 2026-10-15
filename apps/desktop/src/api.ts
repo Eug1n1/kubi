@@ -22,3 +22,12 @@ export function readSettingsFile(): Promise<string | null> {
 export function writeSettingsFile(data: string): Promise<void> {
   return invoke("save_settings", { data });
 }
+
+/** Custom color themes as stored JSON, or null before the first save. */
+export function readThemesFile(): Promise<string | null> {
+  return invoke<string | null>("load_themes");
+}
+
+export function writeThemesFile(data: string): Promise<void> {
+  return invoke("save_themes", { data });
+}

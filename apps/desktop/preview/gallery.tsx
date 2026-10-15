@@ -11,7 +11,7 @@ import { Colors, SettingsModal } from "../src/settings";
 import { LogPane } from "../src/logWindow";
 import { ArgoScreen, Detail, OverviewScreen, ResourceScreen, RowMenu, SearchModal, Sidebar, TopBar } from "../src/screens";
 import { DEFAULT_KEYMAP } from "../src/keymap";
-import { DEFAULT_THEME, THEME_PRESETS, themeTokens } from "../src/theme";
+import { DEFAULT_THEME, BUILTIN_THEMES, themeTokens } from "../src/theme";
 import type { Kubi } from "../src/useKubi";
 import type { ClusterOverview, EventInfo, LogSnapshot, ResourceRow, Tab } from "../src/types";
 
@@ -117,6 +117,14 @@ const contexts = [
 
 const noop = () => {};
 
+/** A custom theme as the file would hold one, for the page that shows one. */
+const CUSTOM_THEME = {
+  id: "midnight",
+  label: "Midnight",
+  builtin: false,
+  theme: { ...DEFAULT_THEME, base: "#101418", accent: "#e58ee0" },
+};
+
 function kubiFor(activeTab: Tab): Kubi {
   return {
     contexts,
@@ -150,6 +158,11 @@ function kubiFor(activeTab: Tab): Kubi {
     searchOpen: false,
     settingsOpen: false,
     keymap: DEFAULT_KEYMAP,
+    themes: BUILTIN_THEMES,
+    activeTheme: "neutral",
+    selectTheme: noop,
+    saveTheme: noop,
+    deleteTheme: noop,
     switchContext: noop,
     openView: noop,
     setFilter: noop,
@@ -318,6 +331,21 @@ const pages: [string, string, string?][] = [
     )}</div>`,
   ],
   [
+    "Settings — colors, custom theme",
+    `<div class="settings-body" style="max-height:none">${renderToStaticMarkup(
+      <Colors
+        kubi={
+          {
+            ...kubiFor(tab("overview", null)),
+            theme: CUSTOM_THEME.theme,
+            themes: [...BUILTIN_THEMES, CUSTOM_THEME],
+            activeTheme: CUSTOM_THEME.id,
+          } as Kubi
+        }
+      />,
+    )}</div>`,
+  ],
+  [
     "Shell — light theme",
     shell(tab("overview", null)),
     `:root { ${Object.entries(themeTokens({ ...DEFAULT_THEME, base: "#f4f5f7", mode: "light" }))
@@ -335,7 +363,7 @@ const pages: [string, string, string?][] = [
     `<div class="pv-primitives">
       <button>Default</button>
       <button class="create">Primary</button>
-      <button class="icon" aria-label="Settings"><svg viewBox="0 0 16 16" width="14" height="14"><circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.3"/></svg></button>
+      <button class="icon" aria-label="Settings"><svg viewBox="0 0 16 16" width="14" height="14"><path d="M6.6 1.9h2.8l.4 1.9 1.6-.9 2 2-1 1.6 1.9.5v2.8l-1.9.4 1 1.6-2 2-1.6-1-.4 1.9H6.6l-.4-1.9-1.6 1-2-2 1-1.6-1.9-.4V6.9l1.9-.5-1-1.6 2-2 1.6.9z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.9" fill="none" stroke="currentColor" stroke-width="1.3"/></svg></button>
       <button disabled>Disabled</button>
       <input value="Filter" />
       <span class="badge warn">3</span>

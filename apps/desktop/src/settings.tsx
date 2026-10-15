@@ -8,7 +8,7 @@ import {
   sameBinding,
   type KeymapAction,
 } from "./keymap";
-import { THEME_PRESETS, parseHex, type Theme } from "./theme";
+import { parseHex, type Theme } from "./theme";
 import type { Kubi } from "./useKubi";
 
 /** Categories of the settings window, in the order the sidebar lists them. */
@@ -199,12 +199,66 @@ function ColorField({
 
 export function Colors({ kubi }: { kubi: Kubi }) {
   const theme: Theme = kubi.theme;
+  const [name, setName] = useState("");
+  const saveTheme = () => {
+    if (name.trim() === "") return;
+    kubi.saveTheme(name);
+    setName("");
+  };
   return (
     <>
       <p className="muted">
         Surfaces are derived from the base color; the accent and status colors are used as given.
         Changes apply immediately.
       </p>
+      <h3>Themes</h3>
+      <div className="theme-list">
+        {kubi.themes.map((item) => (
+          <div key={item.id} className={item.id === kubi.activeTheme ? "theme on" : "theme"}>
+            <button
+              className="theme-apply"
+              aria-pressed={item.id === kubi.activeTheme}
+              onClick={() => kubi.selectTheme(item.id)}
+            >
+              <i className="theme-swatch" aria-hidden="true">
+                <i style={{ background: item.theme.base }} />
+                <i style={{ background: item.theme.accent }} />
+              </i>
+              <span className="theme-text">
+                <span className="theme-name">{item.label}</span>
+                {item.note == null ? null : <span className="muted">{item.note}</span>}
+              </span>
+            </button>
+            {item.builtin ? null : (
+              <button
+                className="theme-delete"
+                aria-label={`Delete ${item.label}`}
+                title="Delete theme"
+                onClick={() => kubi.deleteTheme(item.id)}
+              >
+                <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                  <path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                </svg>
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="theme-save">
+        <input
+          value={name}
+          placeholder="Name the colors on screen…"
+          aria-label="Custom theme name"
+          spellCheck={false}
+          onChange={(event) => setName(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") saveTheme();
+          }}
+        />
+        <button className="create" disabled={name.trim() === ""} onClick={saveTheme}>
+          Save theme
+        </button>
+      </div>
       <div className="theme-mode" role="group" aria-label="Theme mode">
         {(["dark", "light"] as const).map((mode) => (
           <button
@@ -224,18 +278,6 @@ export function Colors({ kubi }: { kubi: Kubi }) {
         value={theme.base}
         onChange={(base) => kubi.updateTheme({ base })}
       />
-      <div className="preset-row">
-        {THEME_PRESETS.map((preset) => (
-          <button
-            key={preset.id}
-            className={preset.theme.base === theme.base && preset.theme.mode === theme.mode ? "on" : ""}
-            onClick={() => kubi.updateTheme({ base: preset.theme.base, mode: preset.theme.mode })}
-          >
-            <i style={{ background: preset.theme.base }} />
-            {preset.label}
-          </button>
-        ))}
-      </div>
       <h3>Accent and status</h3>
       <ColorField
         label="Accent"

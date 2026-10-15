@@ -1,4 +1,4 @@
-import { DEFAULT_THEME, THEME_PRESETS, contrastRatio, themeTokens } from "../src/theme";
+import { DEFAULT_THEME, BUILTIN_THEMES, contrastRatio, themeTokens } from "../src/theme";
 
 /** Every text/surface pair the stylesheet actually relies on. */
 const PAIRS: [string, string, number][] = [
@@ -22,7 +22,7 @@ const PAIRS: [string, string, number][] = [
 let failures = 0;
 const cases = [
   ["default dark", DEFAULT_THEME],
-  ...THEME_PRESETS.map((preset) => [preset.label, preset.theme] as [string, typeof DEFAULT_THEME]),
+  ...BUILTIN_THEMES.map((item) => [item.label, item.theme] as [string, typeof DEFAULT_THEME]),
   ["custom teal", { ...DEFAULT_THEME, base: "#10201e", accent: "#2dd4bf" }],
   ["custom amber accent", { ...DEFAULT_THEME, base: "#1a1611", accent: "#f5a524" }],
 ];

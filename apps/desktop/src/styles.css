@@ -1657,20 +1657,33 @@ input.color-swatch {
 }
 input.color-swatch::-webkit-color-swatch-wrapper { padding: 0; }
 input.color-swatch::-webkit-color-swatch { border: 0; border-radius: 2px; }
-.preset-row { display: flex; flex-wrap: wrap; gap: var(--sp1); margin-top: var(--sp2); }
-.preset-row button {
-  display: inline-flex;
+.theme-list { display: flex; flex-direction: column; gap: var(--sp1); margin-top: var(--sp2); }
+/* The row paints itself; the buttons inside stay transparent so the global
+   button:hover never reads as a patch of a different object. */
+.theme-list .theme { display: flex; align-items: center; border: 1px solid var(--border); border-radius: var(--r-md); }
+.theme-list .theme:hover { border-color: var(--border-strong); }
+.theme-list .theme.on { border-color: var(--accent); background: var(--accent-soft); }
+.theme-list .theme .theme-apply {
+  display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--muted);
-  font-size: var(--fs-xs);
+  gap: var(--sp2);
+  flex: 1;
+  min-width: 0;
+  padding: 6px var(--sp2);
+  background: transparent;
+  border: 0;
+  text-align: left;
 }
-.preset-row button:hover { color: var(--fg); border-color: var(--border-strong); }
-.preset-row button.on { border-color: var(--accent); color: var(--fg); background: var(--accent-soft); }
-.preset-row i { width: 10px; height: 10px; border-radius: 50%; border: 1px solid var(--border-strong); }
+.theme-list .theme .theme-apply:hover { background: transparent; color: var(--fg); }
+.theme-list .theme .theme-delete { background: transparent; border: 0; flex: none; margin-right: 4px; padding: 4px; border-radius: var(--r-sm); color: var(--muted); }
+.theme-list .theme .theme-delete:hover { background: transparent; color: var(--bad-fg); }
+.theme-swatch { display: flex; flex: none; gap: 2px; }
+.theme-swatch i { width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--border-strong); }
+.theme-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.theme-name { font-size: var(--fs-sm); font-weight: 600; }
+.theme-text .muted { font-size: var(--fs-xs); }
+.theme-save { display: flex; gap: var(--sp1); margin-top: var(--sp2); }
+.theme-save input { flex: 1; min-width: 0; }
 
 .binding {
   display: flex;

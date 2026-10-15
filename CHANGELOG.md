@@ -13,6 +13,14 @@ shipped as.
 
 ### Added
 
+- Named color themes: Settings → Colors lists the themes the app ships with — the
+  current dark look and its light counterpart with the same accent and status
+  colors — and switches between them in one click. Choosing a theme applies all
+  of it, base color, mode, accent and status colors together, which the old
+  preset row did not do. The colors on screen can be named and kept as a custom
+  theme — saving under an existing custom name updates it, and custom themes can
+  be deleted again. The choice is remembered across restarts; custom themes live
+  in `themes.json` in the app config directory.
 - Browse a cluster: Cluster (nodes, namespaces, events), Workloads (pods,
   deployments, replica sets, stateful sets, daemon sets, jobs, cron jobs),
   Network (services, endpoints, endpoint slices, ingresses, ingress classes,

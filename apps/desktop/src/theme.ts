@@ -27,13 +27,112 @@ export const DEFAULT_THEME: Theme = {
   bad: "#f85149",
 };
 
-export const THEME_PRESETS: { id: string; label: string; theme: Theme }[] = [
-  { id: "neutral", label: "Neutral", theme: DEFAULT_THEME },
-  { id: "slate", label: "Slate", theme: { ...DEFAULT_THEME, base: "#1b2027" } },
-  { id: "ink", label: "Ink", theme: { ...DEFAULT_THEME, base: "#0f1012" } },
-  { id: "graphite", label: "Graphite", theme: { ...DEFAULT_THEME, base: "#212121" } },
-  { id: "day", label: "Day", theme: { ...DEFAULT_THEME, base: "#f4f5f7", mode: "light" } },
+/** A theme with the name it is listed and stored under. */
+export type NamedTheme = {
+  /** Stable id: how the active theme is remembered and how the file keys it. */
+  id: string;
+  label: string;
+  /** Shipped themes come from code; only custom ones can be edited away. */
+  builtin: boolean;
+  /** One line under the name, e.g. which theme it is the counterpart of. */
+  note?: string;
+  theme: Theme;
+};
+
+/**
+ * The themes the app ships with. The first two are a pair — the dark default
+ * and its light counterpart, same accent and status colors — and the rest vary
+ * only the base color.
+ */
+export const BUILTIN_THEMES: NamedTheme[] = [
+  {
+    id: "neutral",
+    label: "Neutral",
+    builtin: true,
+    note: "the app's dark default",
+    theme: DEFAULT_THEME,
+  },
+  {
+    id: "day",
+    label: "Day",
+    builtin: true,
+    note: "the light counterpart of Neutral",
+    theme: { ...DEFAULT_THEME, base: "#f4f5f7", mode: "light" },
+  },
+  { id: "slate", label: "Slate", builtin: true, theme: { ...DEFAULT_THEME, base: "#1b2027" } },
+  { id: "ink", label: "Ink", builtin: true, theme: { ...DEFAULT_THEME, base: "#0f1012" } },
+  { id: "graphite", label: "Graphite", builtin: true, theme: { ...DEFAULT_THEME, base: "#212121" } },
 ];
+
+/** Where a fresh install starts: the dark one of the shipped pair. */
+export const DEFAULT_THEME_ID = "neutral";
+
+/** Version of the stored themes file; unknown keys are ignored on read. */
+export const THEMES_VERSION = 1;
+
+/** A theme as it appears in a file: a name plus the six theme fields. */
+type ThemeDocument = { name: string } & Theme;
+
+/** A stable id for a theme someone named: lowercase, dashes, unicode kept. */
+function themeId(name: string): string {
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug === "" ? "theme" : slug;
+}
+
+/** A fresh id for a theme someone named: the slug, suffixed until it is unused. */
+export function uniqueThemeId(name: string, taken: Iterable<string>): string {
+  const slug = themeId(name);
+  const seen = new Set(taken);
+  if (!seen.has(slug)) return slug;
+  let n = 2;
+  while (seen.has(`${slug}-${n}`)) n += 1;
+  return `${slug}-${n}`;
+}
+
+/**
+ * Reads the stored themes file — `{ version, themes: [...] }` or a bare array —
+ * keeping only entries that can be listed: a named object whose colors fall back
+ * per field. A file that is missing, empty or unreadable yields no themes, so
+ * the shipped ones keep working.
+ */
+export function parseThemes(text: string | null): NamedTheme[] {
+  if (text == null || text.trim() === "") return [];
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  const list = Array.isArray(raw)
+    ? raw
+    : raw != null && typeof raw === "object" && Array.isArray((raw as { themes?: unknown }).themes)
+      ? (raw as { themes: unknown[] }).themes
+      : [];
+  const out: NamedTheme[] = [];
+  const seen = new Set(BUILTIN_THEMES.map((item) => item.id));
+  for (const entry of list) {
+    if (entry == null || typeof entry !== "object") continue;
+    const name = (entry as { name?: unknown }).name;
+    if (typeof name !== "string" || name.trim() === "") continue;
+    // Two names can slug to the same id; the second one gets a suffix.
+    const id = uniqueThemeId(name, seen);
+    seen.add(id);
+    out.push({ id, label: name.trim(), builtin: false, theme: parseTheme(entry) });
+  }
+  return out;
+}
+
+/** The themes file as stored JSON: the custom themes, built-ins left out. */
+export function serializeThemes(themes: NamedTheme[]): string {
+  const documents: ThemeDocument[] = themes
+    .filter((item) => !item.builtin)
+    .map((item) => ({ name: item.label, ...item.theme }));
+  return JSON.stringify({ version: THEMES_VERSION, themes: documents }, null, 2);
+}
 
 const HEX = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
 

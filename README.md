@@ -43,8 +43,9 @@ end renders what it sends back. It runs on macOS, Windows and Linux.
 **Make it yours**
 
 - Settings with rebindable shortcuts and a theme derived from one base color,
-  with light and dark modes; contrast for accents and filled buttons is computed
-  rather than eyeballed.
+  with light and dark modes plus named themes — the shipped pair and any you
+  name yourself; contrast for accents and filled buttons is computed rather
+  than eyeballed.
 
 ## Requirements
 
@@ -111,8 +112,8 @@ Windows  %APPDATA%\dev.kubi.desktop\
 Linux    ~/.config/dev.kubi.desktop/
 ```
 
-with `settings.json` and `context-groups.json` inside. The identifier in
-`tauri.conf.json` decides those paths; changing it moves the files.
+with `settings.json`, `context-groups.json` and `themes.json` inside. The
+identifier in `tauri.conf.json` decides those paths; changing it moves the files.
 
 ## Visual harness
 

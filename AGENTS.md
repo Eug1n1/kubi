@@ -120,7 +120,7 @@ color picked by hand (a module-level map filled by `setClusterColors`) and falls
 back to a hue hashed from the name. The window mirrors the same map in state so
 a change re-renders; call `setClusterColors` before `setState` so the plain
 helpers and the render agree. Colors persist in `settings.json` through
-`prefs.ts` (currently version 3; unknown or malformed entries are dropped on
+`prefs.ts` (currently version 4; unknown or malformed entries are dropped on
 read).
 
 **Settings are files in the app config dir**, not `localStorage`:

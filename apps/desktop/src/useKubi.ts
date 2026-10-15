@@ -3,7 +3,7 @@ import { emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { cursorPosition, getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
-import { readSettingsFile, send, writeSettingsFile } from "./api";
+import { readSettingsFile, readThemesFile, send, writeSettingsFile, writeThemesFile } from "./api";
 import { setClusterColors } from "./format";
 import {
   DEFAULT_KEYMAP,
@@ -14,7 +14,17 @@ import {
   type KeymapAction,
 } from "./keymap";
 import { parsePrefs, serializePrefs } from "./prefs";
-import { DEFAULT_THEME, applyTheme, type Theme } from "./theme";
+import {
+  BUILTIN_THEMES,
+  DEFAULT_THEME,
+  DEFAULT_THEME_ID,
+  applyTheme,
+  parseThemes,
+  serializeThemes,
+  uniqueThemeId,
+  type NamedTheme,
+  type Theme,
+} from "./theme";
 import type {
   AppEvent,
   ClusterOverview,
@@ -181,6 +191,10 @@ export function useKubi() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [keymap, setKeymap] = useState<Keymap>(DEFAULT_KEYMAP);
   const [theme, setTheme] = useState<Theme>(DEFAULT_THEME);
+  /** Every theme on offer: the shipped ones, then whatever the file holds. */
+  const [themes, setThemes] = useState<NamedTheme[]>(BUILTIN_THEMES);
+  /** Id of the theme the colors came from, or null once they were edited. */
+  const [activeTheme, setActiveTheme] = useState<string | null>(DEFAULT_THEME_ID);
   /** Set by the open list so the filter shortcut has somewhere to point. */
   const focusFilter = useRef<(() => void) | null>(null);
   const [warnings, setWarnings] = useState<{ scope: string | null; byUid: Record<string, ObjectWarning> }>({
@@ -1474,16 +1488,19 @@ export function useKubi() {
 
   useEffect(() => {
     let stop = false;
-    void readSettingsFile()
-      .then((text) => {
+    void Promise.all([readSettingsFile(), readThemesFile()])
+      .then(([settings, stored]) => {
         if (stop) return;
-        const prefs = parsePrefs(text);
+        const prefs = parsePrefs(settings);
         setKeymap(prefs.keymap);
         setTheme(prefs.theme);
+        setActiveTheme(prefs.themeName);
         setColors(prefs.colors);
         // Every strip and badge reads the color through this map, so it has to
         // be in place before the first render that shows one.
         setClusterColors(prefs.colors);
+        // Shipped themes come from code; the file holds only custom ones.
+        setThemes([...BUILTIN_THEMES, ...parseThemes(stored)]);
       })
       .catch(() => {
         if (!stop) pushError("Settings could not be read");
@@ -1498,16 +1515,32 @@ export function useKubi() {
     applyTheme(theme);
   }, [theme]);
 
-  function persist(nextKeymap: Keymap, nextTheme: Theme, nextColors: Record<string, string>) {
+  function persist(
+    nextKeymap: Keymap,
+    nextTheme: Theme,
+    nextThemeName: string | null,
+    nextColors: Record<string, string>,
+  ) {
     void writeSettingsFile(
-      serializePrefs({ keymap: nextKeymap, theme: nextTheme, colors: nextColors }),
+      serializePrefs({
+        keymap: nextKeymap,
+        theme: nextTheme,
+        themeName: nextThemeName,
+        colors: nextColors,
+      }),
     ).catch(() => pushError("Settings could not be saved"));
+  }
+
+  /** Writes the custom themes; the shipped ones never go into the file. */
+  function persistThemes(next: NamedTheme[]) {
+    setThemes(next);
+    void writeThemesFile(serializeThemes(next)).catch(() => pushError("Themes could not be saved"));
   }
 
   /** Applies a change immediately, keeping the running state even if the write fails. */
   function commitKeymap(next: Keymap) {
     setKeymap(next);
-    persist(next, theme, colors);
+    persist(next, theme, activeTheme, colors);
   }
 
   useEffect(() => {
@@ -1739,7 +1772,7 @@ export function useKubi() {
       // Plain helpers read this map too, so it changes before the re-render.
       setClusterColors(next);
       setColors(next);
-      persist(keymap, theme, next);
+      persist(keymap, theme, activeTheme, next);
     },
     setReveal: (reveal: boolean) => {
       const index = session.current.active;
@@ -1927,14 +1960,60 @@ export function useKubi() {
     },
     resetKeymap: () => commitKeymap(DEFAULT_KEYMAP),
     theme,
+    /** Every theme on offer, shipped ones first. */
+    themes,
+    /** Id of the active theme, or null when the colors were edited by hand. */
+    activeTheme,
+    /** Switch theme: base, mode, accent and status colors all change together. */
+    selectTheme: (id: string) => {
+      const named = themes.find((item) => item.id === id);
+      if (!named) return;
+      setTheme(named.theme);
+      setActiveTheme(named.id);
+      persist(keymap, named.theme, named.id, colors);
+    },
+    /** Names the colors on screen as a theme; the same name overwrites that one. */
+    saveTheme: (name: string) => {
+      const label = name.trim();
+      if (label === "") return;
+      const existing = themes.find((item) => !item.builtin && item.label.toLowerCase() === label.toLowerCase());
+      if (existing) {
+        persistThemes(themes.map((item) => (item.id === existing.id ? { ...item, theme } : item)));
+        setActiveTheme(existing.id);
+        persist(keymap, theme, existing.id, colors);
+        return;
+      }
+      const named: NamedTheme = {
+        id: uniqueThemeId(label, themes.map((item) => item.id)),
+        label,
+        builtin: false,
+        theme,
+      };
+      persistThemes([...themes, named]);
+      setActiveTheme(named.id);
+      persist(keymap, theme, named.id, colors);
+    },
+    /** Removes a custom theme; the colors it had stay on screen until another change. */
+    deleteTheme: (id: string) => {
+      const named = themes.find((item) => item.id === id);
+      if (named == null || named.builtin) return;
+      persistThemes(themes.filter((item) => item.id !== id));
+      if (activeTheme === id) {
+        setActiveTheme(null);
+        persist(keymap, theme, null, colors);
+      }
+    },
     updateTheme: (patch: Partial<Theme>) => {
       const next = { ...theme, ...patch };
       setTheme(next);
-      persist(keymap, next, colors);
+      // Colors picked by hand are no longer any named theme's colors.
+      setActiveTheme(null);
+      persist(keymap, next, null, colors);
     },
     resetTheme: () => {
       setTheme(DEFAULT_THEME);
-      persist(keymap, DEFAULT_THEME, colors);
+      setActiveTheme(DEFAULT_THEME_ID);
+      persist(keymap, DEFAULT_THEME, DEFAULT_THEME_ID, colors);
     },
     bindFilter: (focus: (() => void) | null) => {
       focusFilter.current = focus;

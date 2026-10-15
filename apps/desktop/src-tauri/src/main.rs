@@ -25,7 +25,9 @@ fn main() {
             load_context_groups,
             save_context_groups,
             load_settings,
-            save_settings
+            save_settings,
+            load_themes,
+            save_themes
         ])
         .run(tauri::generate_context!())
         .expect("error while running Kubi");
@@ -84,6 +86,16 @@ fn save_settings(app: tauri::AppHandle, data: String) -> Result<(), String> {
     write_config(&config_file(&app, "settings.json")?, &data)
 }
 
+#[tauri::command]
+fn load_themes(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    read_config(&config_file(&app, "themes.json")?)
+}
+
+#[tauri::command]
+fn save_themes(app: tauri::AppHandle, data: String) -> Result<(), String> {
+    write_config(&config_file(&app, "themes.json")?, &data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,6 +111,7 @@ mod tests {
         let dir = temp_dir("missing");
         assert!(read_config(&dir.join("context-groups.json")).unwrap().is_none());
         assert!(read_config(&dir.join("settings.json")).unwrap().is_none());
+        assert!(read_config(&dir.join("themes.json")).unwrap().is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
