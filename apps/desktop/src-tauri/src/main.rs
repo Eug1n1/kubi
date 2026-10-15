@@ -27,7 +27,8 @@ fn main() {
             load_settings,
             save_settings,
             load_themes,
-            save_themes
+            save_themes,
+            load_theme_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running Kubi");
@@ -94,6 +95,13 @@ fn load_themes(app: tauri::AppHandle) -> Result<Option<String>, String> {
 #[tauri::command]
 fn save_themes(app: tauri::AppHandle, data: String) -> Result<(), String> {
     write_config(&config_file(&app, "themes.json")?, &data)
+}
+
+/// The contents of a theme file the user picked in the dialog. The dialog is
+/// what makes the path trusted; the command only reads it.
+#[tauri::command]
+fn load_theme_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|err| format!("read {path}: {err}"))
 }
 
 #[cfg(test)]

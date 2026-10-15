@@ -1739,6 +1739,10 @@ input.color-swatch::-webkit-color-swatch { border: 0; border-radius: 2px; }
 .theme-save { display: flex; gap: var(--sp1); margin-top: var(--sp2); }
 .theme-save input { flex: 1; min-width: 0; }
 
+/* A note under the theme list: what the last theme action did or refused. */
+.theme-note { margin: var(--sp2) 0 0; color: var(--muted); font-size: var(--fs-xs); }
+.theme-note.bad { color: var(--bad-fg); }
+
 .binding {
   display: flex;
   align-items: center;

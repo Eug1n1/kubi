@@ -1,0 +1,9 @@
+{
+  "name": "Solar",
+  "base": "#0b1021",
+  "mode": "dark",
+  "accent": "#268bd2",
+  "ok": "#859900",
+  "warn": "#b58900",
+  "bad": "#dc322f"
+}

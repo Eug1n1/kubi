@@ -134,6 +134,60 @@ export function serializeThemes(themes: NamedTheme[]): string {
   return JSON.stringify({ version: THEMES_VERSION, themes: documents }, null, 2);
 }
 
+/**
+ * Reads a theme document the user picked. Stricter than the stored themes file,
+ * because the person loading it wants to hear what is wrong rather than watch a
+ * broken theme apply itself: a present color that is not a hex value, a mode
+ * that is neither dark nor light, or an entry with no name is an error. Colors
+ * that are simply missing still fall back to their defaults.
+ */
+export function parseThemeFile(text: string): { ok: true; themes: NamedTheme[] } | { ok: false; error: string } {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (err) {
+    return { ok: false, error: `The file is not valid JSON: ${(err as Error).message}` };
+  }
+  const entries: unknown[] = Array.isArray(raw)
+    ? raw
+    : raw != null && typeof raw === "object" && Array.isArray((raw as { themes?: unknown }).themes)
+      ? (raw as { themes: unknown[] }).themes
+      : [raw];
+  if (entries.length === 0 || (entries.length === 1 && (entries[0] == null || typeof entries[0] !== "object"))) {
+    return {
+      ok: false,
+      error: "The file holds no theme. Expected an object with name, base, mode, accent, ok, warn and bad.",
+    };
+  }
+  const out: NamedTheme[] = [];
+  const seen = new Set(BUILTIN_THEMES.map((item) => item.id));
+  for (const [index, entry] of entries.entries()) {
+    if (entry == null || typeof entry !== "object") {
+      return { ok: false, error: `Entry ${index + 1} is not a theme object.` };
+    }
+    const fields = entry as Record<string, unknown>;
+    const name = fields.name;
+    if (typeof name !== "string" || name.trim() === "") {
+      return { ok: false, error: `Entry ${index + 1} has no name.` };
+    }
+    const where = `Theme "${name.trim()}"`;
+    for (const field of ["base", "accent", "ok", "warn", "bad"] as const) {
+      const value = fields[field];
+      if (value !== undefined && (typeof value !== "string" || parseHex(value) == null)) {
+        return { ok: false, error: `${where}: ${field} is not a color (${JSON.stringify(value)}).` };
+      }
+    }
+    if (fields.mode !== undefined && fields.mode !== "dark" && fields.mode !== "light") {
+      return { ok: false, error: `${where}: mode is neither "dark" nor "light" (${JSON.stringify(fields.mode)}).` };
+    }
+    let id = themeId(name);
+    for (let n = 2; seen.has(id); n += 1) id = `${themeId(name)}-${n}`;
+    seen.add(id);
+    out.push({ id, label: name.trim(), builtin: false, theme: parseTheme(entry) });
+  }
+  return { ok: true, themes: out };
+}
+
 const HEX = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
 
 type Rgb = [number, number, number];

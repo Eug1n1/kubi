@@ -3,7 +3,7 @@ import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { cursorPosition, getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
-import { readSettingsFile, readThemesFile, send, writeSettingsFile, writeThemesFile } from "./api";
+import { readSettingsFile, readThemeFile, readThemesFile, send, writeSettingsFile, writeThemesFile } from "./api";
 import { currentWindowLabel, ownerSuffix } from "./windows";
 import { setClusterColors } from "./format";
 import {
@@ -20,6 +20,7 @@ import {
   DEFAULT_THEME,
   DEFAULT_THEME_ID,
   applyTheme,
+  parseThemeFile,
   parseThemes,
   serializeThemes,
   uniqueThemeId,
@@ -205,6 +206,8 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
   const [themes, setThemes] = useState<NamedTheme[]>(BUILTIN_THEMES);
   /** Id of the theme the colors came from, or null once they were edited. */
   const [activeTheme, setActiveTheme] = useState<string | null>(DEFAULT_THEME_ID);
+  /** Note for the Colors screen: what the last theme action did or refused. */
+  const [themeNote, setThemeNote] = useState<{ kind: "ok" | "bad"; text: string } | null>(null);
   /** Set by the open list so the filter shortcut has somewhere to point. */
   const focusFilter = useRef<(() => void) | null>(null);
   const [warnings, setWarnings] = useState<{ scope: string | null; byUid: Record<string, ObjectWarning> }>({
@@ -2169,6 +2172,8 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
     themes,
     /** Id of the active theme, or null when the colors were edited by hand. */
     activeTheme,
+    /** What the last theme action did or refused; shown under the theme list. */
+    themeNote,
     /** Switch theme: base, mode, accent and status colors all change together. */
     selectTheme: (id: string) => {
       const named = themes.find((item) => item.id === id);
@@ -2176,6 +2181,62 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
       setTheme(named.theme);
       setActiveTheme(named.id);
       persist(keymap, named.theme, named.id, colors);
+    },
+    /** Reads a theme file the user picked, validates it, and adds what it holds. */
+    loadThemeFromFile: async () => {
+      const picked = await open({
+        title: "Load a color theme",
+        multiple: false,
+        directory: false,
+        filters: [{ name: "Color theme", extensions: ["json"] }],
+      });
+      if (typeof picked !== "string") return;
+      let text: string;
+      try {
+        text = await readThemeFile(picked);
+      } catch (err) {
+        setThemeNote({ kind: "bad", text: err instanceof Error ? err.message : String(err) });
+        return;
+      }
+      const parsed = parseThemeFile(text);
+      if (!parsed.ok) {
+        setThemeNote({ kind: "bad", text: parsed.error });
+        return;
+      }
+      // A name the list already holds is replaced, and the note below says so.
+      const replaced = parsed.themes.filter((incoming) =>
+        themes.some((item) => !item.builtin && item.label.toLowerCase() === incoming.label.toLowerCase()),
+      );
+      const replacedIds = new Set(replaced.map((item) => item.id));
+      const kept = themes.filter(
+        (item) => item.builtin || !parsed.themes.some((incoming) => incoming.label.toLowerCase() === item.label.toLowerCase()),
+      );
+      // Ids stay unique: a different name can slug to an id the list already
+      // holds, so a collision gets a suffix rather than a shadowed theme.
+      const taken = new Set(themes.filter((item) => !replacedIds.has(item.id)).map((item) => item.id));
+      const loaded = parsed.themes.map((incoming) => {
+        let id = incoming.id;
+        for (let n = 2; taken.has(id); n += 1) id = `${incoming.id}-${n}`;
+        taken.add(id);
+        return { ...incoming, id };
+      });
+      persistThemes([...kept, ...loaded]);
+      // A replaced theme keeps its id; when it was the active one, the window
+      // follows its new colors instead of showing a stale palette.
+      const replacement = loaded.find((incoming) => incoming.id === activeTheme);
+      if (replacement) {
+        setTheme(replacement.theme);
+        persist(keymap, replacement.theme, replacement.id, colors);
+      }
+      setThemeNote({
+        kind: "ok",
+        text:
+          loaded.length === 1
+            ? replaced.length > 0
+              ? `Theme "${loaded[0]?.label}" was replaced.`
+              : `Theme "${loaded[0]?.label}" was added.`
+            : `${loaded.length} themes loaded${replaced.length > 0 ? `, ${replaced.length} replaced` : ""}.`,
+      });
     },
     /** Names the colors on screen as a theme; the same name overwrites that one. */
     saveTheme: (name: string) => {

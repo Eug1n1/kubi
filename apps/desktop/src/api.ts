@@ -31,3 +31,8 @@ export function readThemesFile(): Promise<string | null> {
 export function writeThemesFile(data: string): Promise<void> {
   return invoke("save_themes", { data });
 }
+
+/** A theme file the user picked in the dialog, as text. */
+export function readThemeFile(path: string): Promise<string> {
+  return invoke<string>("load_theme_file", { path });
+}

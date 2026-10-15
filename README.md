@@ -121,6 +121,33 @@ Linux    ~/.config/dev.kubi.desktop/
 with `settings.json`, `context-groups.json` and `themes.json` inside. The
 identifier in `tauri.conf.json` decides those paths; changing it moves the files.
 
+## Themes
+
+The window's colors are a named theme. Settings → Colors lists the ones the app
+ships with — the dark default and its light counterpart, sharing the accent and
+status colors — plus any custom theme loaded with **Load theme…**.
+
+A theme is a JSON document: a name plus the six fields the interface is built
+from. `base` and `mode` drive every surface; the accent and status colors are
+used as given.
+
+```json
+{
+  "name": "Solar",
+  "base": "#0b1021",
+  "mode": "dark",
+  "accent": "#268bd2",
+  "ok": "#859900",
+  "warn": "#b58900",
+  "bad": "#dc322f"
+}
+```
+
+A ready-made example lives in [`themes/example.json`](themes/example.json). A
+file may also hold an array of themes under `themes` to load a pack at once.
+Unknown fields are ignored; a color that is present but not a hex value is
+refused with the reason, and nothing changes.
+
 ## Visual harness
 
 `apps/desktop/preview/gallery.tsx` renders the real components with fake data

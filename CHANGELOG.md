@@ -30,6 +30,11 @@ shipped as.
   theme — saving under an existing custom name updates it, and custom themes can
   be deleted again. The choice is remembered across restarts; custom themes live
   in `themes.json` in the app config directory.
+- Loading a color theme from a file: **Load theme…** in Settings → Colors reads a
+  JSON theme — one document or a pack of them — checks it before touching
+  anything, and says exactly what was wrong when it refuses. The document is
+  documented in the README with a ready-made example in `themes/example.json`,
+  and a name the list already holds is replaced with a note saying so.
 - Browse a cluster: Cluster (nodes, namespaces, events), Workloads (pods,
   deployments, replica sets, stateful sets, daemon sets, jobs, cron jobs),
   Network (services, endpoints, endpoint slices, ingresses, ingress classes,
