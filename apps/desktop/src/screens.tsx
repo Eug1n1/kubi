@@ -257,11 +257,7 @@ export function TopBar({ kubi }: { kubi: Kubi }) {
   return (
     <header className="topbar">
       <div className="topbar-row">
-        <svg className="brand" viewBox="0 0 20 20" width="40" height="40" aria-label="Kubi">
-          <path d="M10 1 18 6 10 11 2 6 Z" fill="#bfdbfe" />
-          <path d="M18 6 18 17 10 19 10 11 Z" fill="#3b82f6" />
-          <path d="M2 6 2 17 10 19 10 11 Z" fill="#2563eb" />
-        </svg>
+        <span className="brand">KUBI</span>
         <span className="ctx-chip" title={context ? `Context: ${context}` : "No context selected"}>
           <i className="dot" style={{ background: context ? clusterColor(context) : "var(--dim)" }} />
           {context ?? "no cluster"}

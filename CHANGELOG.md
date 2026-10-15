@@ -11,15 +11,11 @@ shipped as.
 
 ## [Unreleased]
 
-### Fixed
-
-- The top-left cube icon is no longer vertically squashed and its colors now match the logo.
-
 ## [0.3.1] - 2026-10-16
 
 ### Changed
 
-- The Kubi wordmark in the top-left corner is now the blue cube icon from the logo.
+- The top-left brand is back to the uppercase `KUBI` wordmark; the cube icon is removed.
 
 ### Added
 
