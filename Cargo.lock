@@ -2368,7 +2368,7 @@ dependencies = [
 
 [[package]]
 name = "kubi-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "futures",
  "k8s-openapi",
@@ -2382,7 +2382,7 @@ dependencies = [
 
 [[package]]
 name = "kubi-desktop"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "kubi-core",
  "serde",

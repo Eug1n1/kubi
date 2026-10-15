@@ -11,12 +11,16 @@ shipped as.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-16
+
 ### Added
 
 - In-place app updates: Settings → About shows the running version, checks the
   stable releases for a newer one, downloads it with progress, and restarts to
   install after asking. Dev builds and machines without network get an
   explanation with a link to the releases page instead.
+- The Check for updates button sits in the left content flow with the rest of
+  the About tab, not on its own row at the right.
 
 ## [0.2.0] - 2026-10-15
 
