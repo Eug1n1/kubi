@@ -100,6 +100,62 @@ export type DataEntry = {
   binary: boolean;
 };
 
+/** One key/value pair a pod receives from a ConfigMap or Secret. */
+export type PodValue = {
+  key: string;
+  value: string;
+  masked: boolean;
+  binary: boolean;
+};
+
+/** Where one container mounts a volume, and what backs it. */
+export type PodMount = {
+  container: string;
+  name: string;
+  path: string;
+  readOnly: boolean;
+  subPath: string | null;
+  source: string;
+  values: PodValue[];
+  note: string | null;
+};
+
+/** One environment variable of one container, with its origin. */
+export type PodEnv = {
+  container: string;
+  name: string;
+  origin: string;
+  key: string | null;
+  value: string;
+  masked: boolean;
+  binary: boolean;
+  note: string | null;
+};
+
+/** One container of a pod: spec facts plus its live status. */
+export type PodContainer = {
+  name: string;
+  image: string;
+  /** True for init containers, listed after the regular ones. */
+  init: boolean;
+  /** `8080/TCP http` style labels, in spec order. */
+  ports: string[];
+  /** `Running`, `Waiting: CrashLoopBackOff`, `Terminated: Error`, `Pending`. */
+  state: string;
+  ready: boolean;
+  restarts: number;
+  /** Resource name to quantity text, e.g. cpu: 50m. */
+  requests: Record<string, string>;
+  limits: Record<string, string>;
+  env: PodEnv[];
+  mounts: PodMount[];
+};
+
+export type PodSources = {
+  mounts: PodMount[];
+  env: PodEnv[];
+};
+
 /** Warning events of one object, for the badge in the object list. */
 export type ObjectWarning = {
   uid: string;
@@ -199,6 +255,8 @@ export type Command =
   | "fetchOverview"
   | { fetchEvents: { namespace: string; name: string; uid: string } }
   | { fetchWarnings: { namespace: string | null } }
+  | { fetchPodSources: { namespace: string; name: string; uid: string; reveal: boolean } }
+  | { fetchPodContainers: { namespace: string; name: string; uid: string; reveal: boolean } }
   | "refreshCatalog"
   | { setKubeconfig: { path: string } }
   | { connect: { context: string } }
@@ -268,6 +326,8 @@ export type AppEvent =
   | { objectData: { uid: string; entries: DataEntry[] } }
   | { objectEvents: { uid: string; events: EventInfo[] } }
   | { warnings: { namespace: string | null; objects: ObjectWarning[] } }
+  | { podSources: { uid: string } & PodSources }
+  | { podContainers: { uid: string; containers: PodContainer[] } }
   | { applyResult: { error: string | null } }
   | { overview: ClusterOverview }
   | {
@@ -311,7 +371,7 @@ export type View =
   | { kind: "resource"; resource: ResourceKind }
   | { kind: "custom"; target: CrTarget };
 
-export type DetailTab = "overview" | "yaml" | "metrics" | "data" | "events";
+export type DetailTab = "overview" | "yaml" | "metrics" | "data" | "events" | "sources";
 
 export type LogSnapshot = {
   kind: ResourceKind;
@@ -404,6 +464,10 @@ export type Tab = {
   dataFor: string | null;
   events: EventInfo[] | null;
   eventsFor: string | null;
+  sources: PodSources | null;
+  sourcesFor: string | null;
+  containers: PodContainer[] | null;
+  containersFor: string | null;
   observedAt: number | null;
 };
 

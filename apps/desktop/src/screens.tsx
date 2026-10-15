@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Kubi } from "./useKubi";
-import type { ArgoApp, DataEntry, EventInfo, ObjectWarning, ResourceKind, ResourceRow } from "./types";
+import type { ArgoApp, DataEntry, EventInfo, ObjectWarning, PodContainer, PodEnv, PodMount, PodSources, ResourceKind, ResourceRow } from "./types";
 import { bindingKeys } from "./keymap";
 import {
   NAV,
@@ -12,6 +12,7 @@ import {
   canLogs,
   canRestart,
   completeSearch,
+  canSources,
   crGroups,
   hasValues,
   installedGateway,
@@ -317,6 +318,8 @@ export function NamespaceSelect({ kubi }: { kubi: Kubi }) {
   const [open, setOpen] = useState(false);
   const [prefix, setPrefix] = useState("");
   const root = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const current = kubi.activeTab?.namespace ?? null;
   const needle = prefix.toLowerCase();
   const shown: (string | null)[] = [];
@@ -325,8 +328,30 @@ export function NamespaceSelect({ kubi }: { kubi: Kubi }) {
     if (needle === "" || namespace.toLowerCase().startsWith(needle)) shown.push(namespace);
   }
 
+  const positionMenu = () => {
+    const el = buttonRef.current;
+    const target = menuRef.current;
+    if (!el || !target || !open) return;
+    const rect = el.getBoundingClientRect();
+    const menuHeight = target.offsetHeight || 240;
+    target.style.left = `${Math.max(0, rect.left)}px`;
+    let top = rect.bottom + 2;
+    if (rect.bottom + menuHeight > window.innerHeight - 8) {
+      top = rect.top - menuHeight - 2;
+    }
+    target.style.top = `${Math.max(0, Math.min(top, window.innerHeight - menuHeight - 4))}px`;
+    target.style.display = "block";
+  };
+
+  const kubiRef = useRef(kubi);
+  useEffect(() => {
+    kubiRef.current = kubi;
+  }, [kubi]);
+
   useEffect(() => {
     if (!open) return;
+    positionMenu();
+    const kubi = kubiRef.current;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Backspace") {
         setPrefix((value) => value.slice(0, -1));
@@ -352,29 +377,42 @@ export function NamespaceSelect({ kubi }: { kubi: Kubi }) {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("pointerdown", onPointer);
     };
-  }, [open, shown, kubi]);
+  }, [open, shown]);
 
   return (
     <div className="ns" ref={root}>
       <span className="muted">Namespace</span>
-      <button
-        className="current"
-        onClick={() => {
-          setPrefix("");
-          setOpen((value) => !value);
-        }}
-      >
+      <button ref={buttonRef} className="current" onClick={() => {
+        setPrefix("");
+        setOpen((value) => !value);
+      }}>
         {current ?? "All namespaces"}
         {open && prefix ? `  ${prefix}` : ""}
       </button>
       {open ? (
-        <menu>
-          {shown.length === 0 ? <li className="muted">No namespaces</li> : null}
+        <div
+          ref={menuRef}
+          className="ns-menu"
+          style={{
+            position: "fixed",
+            zIndex: 1000,
+            maxHeight: "240px",
+            overflowY: "auto",
+            background: "var(--bg)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--r-md)",
+            boxShadow: "var(--shadow)",
+            padding: "var(--sp2)",
+          }}
+          onClick={(event) => event.stopPropagation()}
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          {shown.length === 0 ? <div className="muted">No namespaces</div> : null}
           {shown.map((item) => {
             const label = item ?? "All namespaces";
             const on = item === current;
             return (
-              <li key={label}>
+              <div key={item ?? "__all__"} className="ns-menu-item">
                 <button
                   className={on ? "on" : ""}
                   onClick={() => {
@@ -384,10 +422,10 @@ export function NamespaceSelect({ kubi }: { kubi: Kubi }) {
                 >
                   {label}
                 </button>
-              </li>
+              </div>
             );
           })}
-        </menu>
+        </div>
       ) : null}
     </div>
   );
@@ -688,12 +726,35 @@ function WarnIcon() {
   );
 }
 
+/** Narrowest the detail panel can be dragged. */
+const DETAIL_MIN = 280;
+/** Object list width that stays visible when the panel is dragged as wide as the
+ * window allows, so the table can never be covered completely. */
+const LIST_KEEP = 360;
+
+/** Widest the detail panel may get inside a workspace of `room` pixels. */
+function panelMax(room: number): number {
+  return Math.max(DETAIL_MIN, room - LIST_KEEP);
+}
+
 export function Detail({ kubi, width, onWidth }: { kubi: Kubi; width: number; onWidth: (width: number) => void }) {
   const tab = kubi.activeTab;
   const row = tab?.rows.find((item) => item.uid === tab.selected);
+  const dragging = useRef<{ x: number; width: number } | null>(null);
+  const aside = useRef<HTMLElement | null>(null);
+  // A panel dragged wide is clamped back when the window shrinks, so the object
+  // list never disappears behind it.
+  useEffect(() => {
+    const fit = () => {
+      const room = aside.current?.parentElement?.clientWidth;
+      if (room != null && width > panelMax(room)) onWidth(panelMax(room));
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [width, onWidth]);
   if (!tab || !row) return null;
   const kind = tab.view.kind === "resource" ? tab.view.resource : null;
-  const dragging = useRef<{ x: number; width: number } | null>(null);
   // Events load with the selection, so warnings are on hand before the tab is opened.
   const events = tab.eventsFor === row.uid ? tab.events : null;
   // Probe failures of a pod that is running again say nothing about now.
@@ -701,7 +762,7 @@ export function Detail({ kubi, width, onWidth }: { kubi: Kubi; width: number; on
   const warnings = shown.filter((event) => event.kind === "Warning");
   const hidden = (events?.length ?? 0) - shown.length;
   return (
-    <aside className="detail" style={{ width }}>
+    <aside className="detail" ref={aside} style={{ width }}>
       <button
         className="grip"
         aria-label="Resize panel"
@@ -712,7 +773,8 @@ export function Detail({ kubi, width, onWidth }: { kubi: Kubi; width: number; on
         onPointerMove={(event) => {
           const drag = dragging.current;
           if (!drag) return;
-          onWidth(Math.min(480, Math.max(280, drag.width + (drag.x - event.clientX))));
+          const room = aside.current?.parentElement?.clientWidth ?? window.innerWidth;
+          onWidth(Math.min(panelMax(room), Math.max(DETAIL_MIN, drag.width + (drag.x - event.clientX))));
         }}
         onPointerUp={() => {
           dragging.current = null;
@@ -772,6 +834,11 @@ export function Detail({ kubi, width, onWidth }: { kubi: Kubi; width: number; on
             Data
           </button>
         ) : null}
+        {kind && canSources(kind) ? (
+          <button className={tab.detailTab === "sources" ? "active" : ""} onClick={() => kubi.setDetailTab("sources")}>
+            Sources
+          </button>
+        ) : null}
       </div>
       <div className="body">
         {tab.detailTab === "overview" ? (
@@ -785,6 +852,8 @@ export function Detail({ kubi, width, onWidth }: { kubi: Kubi; width: number; on
             onServicePort={
               kind === "services" ? (port) => kubi.forwardServicePort(row.namespace, row.name, port) : undefined
             }
+            containers={tab.containers}
+            containersReady={tab.containersFor === tab.selected}
           />
         ) : null}
         {tab.detailTab === "yaml" ? (
@@ -795,6 +864,9 @@ export function Detail({ kubi, width, onWidth }: { kubi: Kubi; width: number; on
         ) : null}
         {tab.detailTab === "events" ? (
           <EventsTab ready={tab.eventsFor === tab.selected} events={shown} hidden={hidden} />
+        ) : null}
+        {tab.detailTab === "sources" ? (
+          <SourcesTab ready={tab.sourcesFor === tab.selected} sources={tab.sources} />
         ) : null}
         {tab.detailTab === "metrics" ? <Metrics kubi={kubi} row={row} /> : null}
       </div>
@@ -1446,6 +1518,8 @@ function OverviewTab({
   warnings,
   onEvents,
   onServicePort,
+  containers,
+  containersReady,
 }: {
   row: ResourceRow;
   kind: ResourceKind | null;
@@ -1454,6 +1528,8 @@ function OverviewTab({
   warnings: EventInfo[];
   onEvents?: () => void;
   onServicePort?: (port: number) => void;
+  containers: PodContainer[] | null;
+  containersReady: boolean;
 }) {
   const facts = resourceFacts(kind, row);
   return (
@@ -1525,10 +1601,212 @@ function OverviewTab({
           )}
         </section>
       ) : null}
+      {kind === "pods" ? <ContainersCard ready={containersReady} containers={containers} /> : null}
       <PairFold title="Labels" pairs={row.labels} />
       <PairFold title="Annotations" pairs={row.annotations} nowrapKey />
     </div>
   );
+}
+
+/** Spec facts and live status of every container, right after the pods facts card. */
+function ContainersCard({ ready, containers }: { ready: boolean; containers: PodContainer[] | null }) {
+  return (
+    <section className="card">
+      <h2>
+        Containers
+        {containers ? <span className="muted"> {containers.length}</span> : null}
+      </h2>
+      {!ready || containers == null ? <p className="muted">Loading containers…</p> : null}
+      {ready && containers?.length === 0 ? <p className="muted">none</p> : null}
+      {containers?.map((container, index) => (
+        <ContainerBlock container={container} key={`${container.name}-${index}`} />
+      ))}
+    </section>
+  );
+}
+
+/** Text color of the container state; the label itself stays readable either way. */
+function stateColor(state: string, ready: boolean): string {
+  if (state === "Running") return ready ? "var(--ok)" : "var(--warn)";
+  if (state.startsWith("Waiting") || state.startsWith("Terminated")) return "var(--bad)";
+  if (state === "Pending") return "var(--warn)";
+  return "var(--muted)";
+}
+
+function ContainerBlock({ container }: { container: PodContainer }) {
+  const color = stateColor(container.state, container.ready);
+  return (
+    <div className="container-block">
+      <div className="container-head">
+        <span className="container-name">{container.name}</span>
+        {container.init ? <span className="badge">init</span> : null}
+        <span className="container-state" style={{ color }}>
+          <i className="dot" style={{ background: color }} />
+          {container.state}
+        </span>
+        <span className="spacer" />
+        {container.restarts > 0 ? (
+          <span className="badge warn" title={`${container.restarts} restarts`}>
+            ×{container.restarts}
+          </span>
+        ) : null}
+      </div>
+      <p className="container-fact wrap">
+        <span className="field-label">Image</span>
+        {container.image || "—"}
+      </p>
+      <div className="container-fact port-row">
+        <span className="field-label">Ports</span>
+        {container.ports.length > 0 ? (
+          <div className="port-list">
+            {container.ports.map((port) => (
+              <span key={port}>{port}</span>
+            ))}
+          </div>
+        ) : (
+          <span>—</span>
+        )}
+      </div>
+      <ResourcesTable requests={container.requests} limits={container.limits} />
+      {container.env.length > 0 ? (
+        <details className="container-fold">
+          <summary>
+            Environment <span className="muted">{container.env.length}</span>
+          </summary>
+          <EnvGroups env={container.env} />
+        </details>
+      ) : null}
+      {container.mounts.length > 0 ? (
+        <details className="container-fold">
+          <summary>
+            Mounts <span className="muted">{container.mounts.length}</span>
+          </summary>
+          <FactTable
+            columns={["Path", "Source"]}
+            rows={container.mounts.map((item) => [item.path, mountLabel(item)])}
+            nowrapFirst
+          />
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+/** Requests and limits as one table: rows are requests/limits, columns are resources. */
+function ResourcesTable({
+  requests,
+  limits,
+}: {
+  requests: Record<string, string>;
+  limits: Record<string, string>;
+}) {
+  const resources = [...new Set([...Object.keys(requests), ...Object.keys(limits)])].sort();
+  if (resources.length === 0) return null;
+  return (
+    <div className="table-scroll">
+      <table className="detail-table resources-table">
+        <thead>
+          <tr>
+            <th aria-hidden="true" />
+            {resources.map((resource) => (
+              <th key={resource}>{resource}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {(["requests", "limits"] as const).map((row) => (
+            <tr key={row}>
+              <td className="field-label nowrap">{row}</td>
+              {resources.map((resource) => (
+                <td key={resource}>{row === "requests" ? requests[resource] ?? "—" : limits[resource] ?? "—"}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** One value that may be a Secret payload: it stays hidden behind dots until the
+ * eye of that single value is clicked, so no global switch is needed. */
+function SecretValue({ value, masked }: { value: string; masked: boolean }) {
+  const [shown, setShown] = useState(!masked);
+  useEffect(() => {
+    setShown(!masked);
+  }, [masked]);
+  return (
+    <span className="env-value">
+      <span className="wrap">{shown && value ? previewValue(value) : masked ? "••••••" : "—"}</span>
+      {masked ? (
+        <IconButton label={shown ? "Hide value" : "Show value"} onClick={() => setShown((open) => !open)}>
+          <EyeIcon />
+        </IconButton>
+      ) : null}
+      {value ? (
+        <IconButton label="Copy" onClick={() => void navigator.clipboard.writeText(value)}>
+          <CopyIcon />
+        </IconButton>
+      ) : null}
+    </span>
+  );
+}
+
+/** Env values of one container, grouped by where they come from: a small
+ * origin heading over each two-column name/value table. */
+function EnvGroups({ env }: { env: PodEnv[] }) {
+  const groups = new Map<string, PodEnv[]>();
+  for (const item of env) {
+    const origin = envOrigin(item);
+    const list = groups.get(origin);
+    if (list) list.push(item);
+    else groups.set(origin, [item]);
+  }
+  return (
+    <div>
+      {[...groups].map(([origin, items]) => (
+        <div className="env-group" key={origin}>
+          <p className="env-origin">{origin}</p>
+          <div className="table-scroll">
+            <table className="detail-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item, index) => (
+                  <tr key={`${item.name}-${index}`}>
+                    <td className="nowrap">{item.name}</td>
+                    <td className="wrap">
+                      <span className="cell">
+                        <SecretValue value={item.value} masked={item.masked} />
+                        {item.note ? <span className="muted"> {item.note}</span> : null}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Where an env value comes from, with the key when it differs from the name. */
+function envOrigin(env: PodEnv): string {
+  return env.key != null && !env.name.endsWith(env.key) ? `${env.origin}:${env.key}` : env.origin;
+}
+
+function mountLabel(mount: PodMount): string {
+  const parts = [mount.source, `volume ${mount.name}`];
+  if (mount.subPath) parts.push(`subPath ${mount.subPath}`);
+  if (mount.readOnly) parts.push("ro");
+  if (mount.note) parts.push(mount.note);
+  return parts.join(" · ");
 }
 
 function PairFold({ title, pairs, nowrapKey = false }: { title: string; pairs: [string, string][]; nowrapKey?: boolean }) {
@@ -1567,30 +1845,32 @@ function FactTable({
   nowrapFirst = false,
 }: {
   columns: string[];
-  rows: string[][];
+  rows: ReactNode[][];
   nowrapFirst?: boolean;
 }) {
   return (
-    <table className="detail-table">
-      <thead>
-        <tr>
-          {columns.map((column) => (
-            <th key={column}>{column}</th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row, index) => (
-          <tr key={row[0] ? `${row[0]}-${index}` : index}>
-            {columns.map((column, columnIndex) => (
-              <td key={column} className={nowrapFirst && columnIndex === 0 ? "nowrap" : "wrap"}>
-                {row[columnIndex] ?? ""}
-              </td>
+    <div className="table-scroll">
+      <table className="detail-table">
+        <thead>
+          <tr>
+            {columns.map((column) => (
+              <th key={column}>{column}</th>
             ))}
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={index}>
+              {columns.map((column, columnIndex) => (
+                <td key={column} className={nowrapFirst && columnIndex === 0 ? "nowrap" : "wrap"}>
+                  <span className="cell">{row[columnIndex] ?? ""}</span>
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -1955,6 +2235,87 @@ function DataTab({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/** Mounts and environment of the selected pod, with ConfigMap and Secret values resolved. */
+function SourcesTab({
+  ready,
+  sources,
+}: {
+  ready: boolean;
+  sources: PodSources | null;
+}) {
+  if (!ready || sources == null) return <p className="muted">Loading sources…</p>;
+  const containers: string[] = [];
+  for (const item of [...sources.env, ...sources.mounts]) {
+    if (!containers.includes(item.container)) containers.push(item.container);
+  }
+  if (containers.length === 0) return <p className="muted">No environment or mounts.</p>;
+  return (
+    <div className="detail-stack">
+      {containers.map((container) => {
+        const env = sources.env.filter((item) => item.container === container);
+        const mounts = sources.mounts.filter((item) => item.container === container);
+        return (
+          <section className="card" key={container}>
+            <h2>{container}</h2>
+            {env.length > 0 ? (
+              <div className="fact-block">
+                <p className="muted">Environment</p>
+                {env.map((item, index) => (
+                  <EnvEntry env={item} key={`${item.name}-${index}`} />
+                ))}
+              </div>
+            ) : null}
+            {mounts.length > 0 ? (
+              <div className="fact-block">
+                <p className="muted">Mounts</p>
+                {mounts.map((item, index) => (
+                  <MountEntry mount={item} key={`${item.name}-${item.path}-${index}`} />
+                ))}
+              </div>
+            ) : null}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function EnvEntry({ env }: { env: PodEnv }) {
+  return (
+    <div className="entry">
+      <div className="entry-head">
+        <span className="key wrap">{env.name}</span>
+        <span className="muted wrap">{envOrigin(env)}</span>
+      </div>
+      <SecretValue value={env.value} masked={env.masked} />
+      {env.note ? <p className="muted wrap">{env.note}</p> : null}
+    </div>
+  );
+}
+
+function MountEntry({ mount }: { mount: PodMount }) {
+  return (
+    <div className="entry">
+      <div className="entry-head">
+        <span className="key wrap">{mount.path}</span>
+        <span className="muted wrap">{mount.source}</span>
+        {mount.readOnly ? <span className="badge">ro</span> : null}
+      </div>
+      <div className="muted wrap">
+        volume {mount.name}
+        {mount.subPath ? ` · subPath ${mount.subPath}` : ""}
+      </div>
+      {mount.values.length > 0 ? (
+        <FactTable
+          columns={["Key", "Value"]}
+          rows={mount.values.map((value) => [value.key, <SecretValue value={value.value} masked={value.masked} />])}
+        />
+      ) : null}
+      {mount.note ? <p className="muted wrap">{mount.note}</p> : null}
     </div>
   );
 }

@@ -81,6 +81,10 @@ function blankTab(view: View, namespace: string | null, id: number): Tab {
     dataFor: null,
     events: null,
     eventsFor: null,
+    sources: null,
+    sourcesFor: null,
+    containers: null,
+    containersFor: null,
     observedAt: null,
   };
 }
@@ -581,6 +585,12 @@ export function useKubi() {
     if (index == null) return;
     updateTabs((items) => items.map((item, i) => (i === index ? { ...item, detailTab } : item)));
     if (detailTab === "events") requestEvents(index);
+    if (detailTab === "sources") requestSources(index);
+    // Reopening Overview refreshes the container statuses without another click.
+    if (detailTab === "overview") {
+      const tab = session.current.tabs[index];
+      if (tab?.view.kind === "resource" && tab.view.resource === "pods") requestPodContainers(index);
+    }
   }
 
   function commitTabs(next: Tab[]) {
@@ -666,6 +676,34 @@ export function useKubi() {
     void send({ fetchWarnings: { namespace: tab.namespace } });
   }
 
+  /** Reads the ConfigMaps and Secrets the selected pod refers to. */
+  function requestSources(index = session.current.active) {
+    if (index == null) return;
+    const tab = session.current.tabs[index];
+    const row = tab?.rows.find((item) => item.uid === tab.selected);
+    if (!tab || !row) return;
+    updateTabs((items) =>
+      items.map((item, i) => (i === index ? { ...item, sources: null, sourcesFor: row.uid } : item)),
+    );
+    void send({
+      fetchPodSources: { namespace: row.namespace, name: row.name, uid: row.uid, reveal: tab.reveal },
+    });
+  }
+
+  /** Reads spec facts and live status of every container of the selected pod. */
+  function requestPodContainers(index = session.current.active) {
+    if (index == null) return;
+    const tab = session.current.tabs[index];
+    const row = tab?.rows.find((item) => item.uid === tab.selected);
+    if (!tab || !row) return;
+    updateTabs((items) =>
+      items.map((item, i) => (i === index ? { ...item, containers: null, containersFor: row.uid } : item)),
+    );
+    void send({
+      fetchPodContainers: { namespace: row.namespace, name: row.name, uid: row.uid, reveal: tab.reveal },
+    });
+  }
+
   function activate(index: number) {
     const tab = session.current.tabs[index];
     if (!tab) return;
@@ -677,6 +715,7 @@ export function useKubi() {
     void send({ setNamespace: { namespace: tab.namespace } });
     void send({ watch: { target } });
     if (tab.detailTab === "events") requestEvents(index);
+    if (tab.detailTab === "sources") requestSources(index);
   }
 
   function showHome(next: Home) {
@@ -711,6 +750,10 @@ export function useKubi() {
               dataFor: null,
               events: null,
               eventsFor: null,
+              sources: null,
+              sourcesFor: null,
+              containers: null,
+              containersFor: null,
               waiting: true,
             }
           : item,
@@ -791,6 +834,10 @@ export function useKubi() {
                     dataFor: null,
                     events: null,
                     eventsFor: null,
+                    sources: null,
+                    sourcesFor: null,
+                    containers: null,
+                    containersFor: null,
                     detailTab: "overview" as const,
                   }
                 : {}),
@@ -802,6 +849,7 @@ export function useKubi() {
       setHistory([]);
       requestYaml(index);
       requestEvents(index);
+      if (tab.view.kind === "resource" && tab.view.resource === "pods") requestPodContainers(index);
     }
   }
 
@@ -1027,6 +1075,20 @@ export function useKubi() {
       const { uid, events } = event.objectEvents;
       updateTabs((items) =>
         items.map((tab) => (tab.eventsFor === uid ? { ...tab, events } : tab)),
+      );
+      return;
+    }
+    if (key === "podSources" && "podSources" in event) {
+      const { uid, mounts, env } = event.podSources;
+      updateTabs((items) =>
+        items.map((tab) => (tab.sourcesFor === uid ? { ...tab, sources: { mounts, env } } : tab)),
+      );
+      return;
+    }
+    if (key === "podContainers" && "podContainers" in event) {
+      const { uid, containers } = event.podContainers;
+      updateTabs((items) =>
+        items.map((tab) => (tab.containersFor === uid ? { ...tab, containers } : tab)),
       );
       return;
     }
@@ -1521,6 +1583,8 @@ export function useKubi() {
         ),
       );
       requestYaml(index);
+      if (session.current.tabs[index]?.detailTab === "sources") requestSources(index);
+      if (session.current.tabs[index]?.detailTab === "overview") requestPodContainers(index);
     },
     refresh: () => {
       if (refreshingRef.current) return;

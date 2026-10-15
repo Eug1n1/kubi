@@ -53,6 +53,11 @@
   --topbar: 44px;
   --rail: 56px;
   --sidebar: 232px;
+  /* Narrowest the detail panel content goes before the panel scrolls sideways. */
+  --detail-content: 400px;
+  /* Value cells in panel tables wrap after this many characters; the table
+     scrolls sideways instead of squeezing the column. */
+  --value-width: 120ch;
 
   --r-sm: 4px;
   --r-md: 6px;
@@ -538,8 +543,40 @@ h1 { font-size: 18px; font-weight: 600; margin: 0; }
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
-.toolbar .ns { display: flex; align-items: center; gap: 6px; }
+.toolbar .ns { position: relative; }
 .toolbar .ns .current {
+.toolbar .ns menu,
+.toolbar .ns ul {
+  display: block;
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  min-width: 100%;
+  max-width: 340px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: var(--r-md);
+  padding: var(--sp2);
+  box-shadow: var(--shadow);
+  z-index: 10;
+  list-style: none;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.toolbar .ns menu li button {
+  width: 100%;
+  text-align: left;
+  height: var(--control);
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  padding: 0 var(--sp2);
+  color: var(--fg);
+}
+.toolbar .ns menu li button:hover { background: var(--accent-soft); }
+.toolbar .ns menu li button.on { background: var(--accent-soft); color: var(--fg); font-weight: 600; }
   min-width: 128px;
   height: var(--control);
   text-align: left;
@@ -676,16 +713,20 @@ th.num, td.num {
   overflow-wrap: anywhere;
 }
 .detail header .muted { font-size: var(--fs-xs); margin-top: 2px; }
-.detail .actions { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.detail .actions { display: flex; align-items: center; gap: 2px; margin-left: auto; flex: none; }
 .subtabs {
   flex: none;
   display: flex;
   gap: 2px;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
-  padding: 0 var(--sp2);
+  /* The tab strip scrolls sideways instead of running past the panel. The 1px
+     bottom padding keeps the active tab underline inside the scroll area. */
+  padding: 0 var(--sp2) 1px;
+  overflow-x: auto;
 }
 .subtabs button {
+  flex: none;
   padding: var(--sp2) 10px;
   font-size: var(--fs-sm);
   color: var(--muted);
@@ -698,6 +739,24 @@ th.num, td.num {
 .subtabs button:hover { color: var(--fg); background: transparent; }
 .subtabs button.active { color: var(--fg); border-bottom-color: var(--accent); }
 .detail .body { flex: 1; overflow: auto; padding: var(--sp3); min-height: 0; }
+/* Content keeps a readable width, so a narrow panel scrolls sideways instead of
+   squeezing tables and values into unreadable columns. */
+.detail .body > * { min-width: var(--detail-content); }
+
+/* YAML tab: the editor fills the panel and scrolls both ways instead of
+   wrapping lines. */
+.yaml-tab .row { display: flex; gap: var(--sp1); margin-top: var(--sp2); }
+.yaml-tab textarea.yaml {
+  width: 100%;
+  min-height: 320px;
+  margin-top: var(--sp2);
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  white-space: pre;
+  overflow: auto;
+  resize: vertical;
+}
 
 .detail-stack { display: flex; flex-direction: column; gap: var(--sp3); }
 .card {
@@ -812,7 +871,7 @@ th.num, td.num {
   vertical-align: -1px;
 }
 .warn-mark svg { display: block; }
-.detail-table { width: 100%; min-width: 0; border-collapse: separate; border-spacing: 0; }
+.detail-table { width: 100%; min-width: max-content; border-collapse: separate; border-spacing: 0; }
 .detail-table th {
   position: static;
   background: transparent;
@@ -835,8 +894,97 @@ th.num, td.num {
 .detail-table td + td { padding-left: var(--sp2); }
 .detail-table td.nowrap { white-space: nowrap; }
 .detail-table td.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Each panel table scrolls sideways on its own, and its value cells keep room
+   for --value-width characters per line instead of being squeezed by the panel.
+   `min-width: max-content` on the table keeps columns at that width, so the
+   scrollbar appears on the table, not on the whole panel. */
+.table-scroll { overflow-x: auto; }
+.detail-table .cell { display: block; max-width: var(--value-width); }
 .detail-table tr:hover td { background: transparent; }
 .detail-table tr:last-child td { border-bottom: none; }
+/* Container block in the pod overview. */
+.container-block { padding: var(--sp3) 0; border-top: 1px solid var(--border); }
+.container-block:first-of-type { border-top: 0; padding-top: var(--sp1); }
+.container-head { display: flex; align-items: center; gap: var(--sp1); margin-bottom: var(--sp2); }
+.container-name {
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+.container-state {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.container-fact { margin: var(--sp1) 0; font-family: var(--mono); font-size: var(--fs-sm); }
+/* Ports read as one per line, label aligned to the first entry. */
+.port-row { display: flex; align-items: flex-start; }
+.port-list { display: flex; flex-direction: column; overflow-wrap: anywhere; }
+/* Uppercase, high-contrast parameter label next to a value. */
+.field-label {
+  display: inline-block;
+  min-width: 76px;
+  margin-right: var(--sp2);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  vertical-align: 1px;
+}
+.resources-table td.field-label { color: var(--fg); min-width: 64px; }
+/* Environment / Mounts are the primary landmarks of a container block. */
+.container-fold { margin-top: var(--sp3); }
+.container-fold summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  list-style: none;
+  margin-bottom: var(--sp2);
+  color: var(--fg);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  user-select: none;
+}
+.container-fold summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 5px solid var(--fg);
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  transition: transform 0.12s ease;
+}
+.container-fold[open] summary::before { transform: rotate(90deg); }
+.container-fold summary:hover { color: var(--accent-text); }
+.container-fold summary:hover::before { border-left-color: var(--accent-text); }
+.container-fold summary .muted { font-weight: 400; letter-spacing: 0; text-transform: none; }
+.container-fold .detail-table { margin-top: var(--sp2); }
+.env-value { display: flex; align-items: center; gap: var(--sp1); }
+.env-value .icon { width: 20px; height: 20px; flex: none; }
+.env-value > .wrap { min-width: 0; }
+/* Origin groups: subordinate to the fold title, but marked off from the rows. */
+.env-group { margin-top: var(--sp3); }
+.env-group:first-child { margin-top: 0; }
+.env-origin {
+  margin: 0 0 var(--sp2);
+  padding: 2px 0 2px var(--sp2);
+  border-left: 2px solid var(--accent);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.reveal-secrets { display: block; margin-bottom: var(--sp2); }
 .chart { width: 100%; height: 92px; display: block; }
 .stats { display: flex; flex-wrap: wrap; gap: var(--sp2); }
 .stat {
@@ -863,6 +1011,20 @@ th.num, td.num {
 .rings { display: flex; flex-wrap: wrap; gap: var(--sp3); }
 .ring-card { flex: 1; min-width: 150px; }
 .ring-card .ring { display: block; margin: 0 auto var(--sp2); }
+
+/* Content column inside a screen: vertical rhythm between the heading,
+   intro paragraphs and the stacked cards. Cards have inner padding only,
+   so the gap between sibling sections has to come from here.
+   Direct-child paragraphs drop their default UA margins so the single
+   `gap` gives an even rhythm (flex margins don't collapse). */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp3);
+  width: 100%;
+}
+.page > p { margin: 0; }
+.page.wide { max-width: none; }
 
 .scroll-page { flex: 1; min-height: 0; overflow: auto; padding: var(--sp3); }
 .argo-scroll { flex: 1; min-height: 0; overflow: auto; }

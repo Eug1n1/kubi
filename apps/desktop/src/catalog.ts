@@ -137,6 +137,11 @@ export function canExec(kind: ResourceKind): boolean {
   return kind === "pods";
 }
 
+/** Mounts and env sources are resolved from a live pod, so only pods can show them. */
+export function canSources(kind: ResourceKind): boolean {
+  return kind === "pods";
+}
+
 export function canLogs(kind: ResourceKind): boolean {
   return (
     kind === "pods" ||
