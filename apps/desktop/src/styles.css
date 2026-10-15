@@ -126,7 +126,19 @@ input:hover, textarea:hover, select:hover { border-color: var(--border-strong); 
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--scroll-hover); background-clip: padding-box; }
 
-h1 { font-size: 18px; font-weight: 600; margin: 0; }
+h1 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+  text-wrap: balance;
+}
+/* Short prose in panels and banners: no single orphaned word on the last line. */
+p,
+.wrap,
+.empty,
+.hint {
+  text-wrap: pretty;
+}
 
 .muted { color: var(--muted); }
 .dim { color: var(--dim); }
@@ -307,7 +319,12 @@ h1 { font-size: 18px; font-weight: 600; margin: 0; }
   text-transform: uppercase;
   color: var(--muted);
 }
-.hotbar .panel header .muted { margin-left: auto; font-weight: 400; letter-spacing: 0; }
+.hotbar .panel header .muted {
+  margin-left: auto;
+  font-weight: 400;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
 .panel-list { flex: 1; min-height: 0; overflow: auto; padding: var(--sp2) 0 10px; }
 .folder { padding: 0 var(--sp2); }
 .folder-head {
@@ -471,6 +488,7 @@ h1 { font-size: 18px; font-weight: 600; margin: 0; }
   font-weight: 600;
   letter-spacing: 0;
   text-transform: none;
+  font-variant-numeric: tabular-nums;
 }
 .nav-item:hover { background: var(--hover); color: var(--fg); }
 .nav-item.active {
@@ -651,11 +669,12 @@ h1 { font-size: 18px; font-weight: 600; margin: 0; }
 .menu {
   position: fixed;
   z-index: 60;
+  /* 4px of padding around 4px buttons: the outer corner is the sum of the two. */
   min-width: 200px;
   padding: var(--sp1);
   background: var(--bg-panel);
   border: 1px solid var(--border-strong);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   box-shadow: 0 10px 26px var(--shadow);
 }
 .menu button {
@@ -754,6 +773,7 @@ button.create {
 }
 button.create:hover { background: var(--accent-fill-hi); }
 button.icon {
+  position: relative;
   width: 26px;
   height: 26px;
   padding: 0;
@@ -765,6 +785,36 @@ button.icon {
 button.icon:hover { color: var(--fg); background: var(--hover); }
 button.icon.bad { color: var(--bad); }
 button.icon svg { display: block; }
+/* The control stays 26px; the target grows only where the neighbours leave room
+   for it (measured: 12px of clearance in the topbar, 8px in the drawer and modal
+   headers). The packed rows of the detail panel keep 26px — an extended area
+   there would overlap the next button, and two targets must never overlap. */
+.topbar .icon::after,
+.log-drawer header .icon::after,
+.modal .icon::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+}
+.topbar .icon::after { inset: -5px; }
+
+/* Press feedback for the buttons that start something. Rows, tabs and nav items
+   stay instant: they are touched far too often to animate. */
+.toolbar button,
+.modal button,
+button.icon,
+button.create,
+.hotbar .add {
+  transition-property: scale, background-color, color, border-color;
+  transition-duration: var(--t-fast);
+  transition-timing-function: ease-out;
+}
+.toolbar button:active:not(:disabled),
+.modal button:active:not(:disabled),
+button.icon:active:not(:disabled),
+button.create:active:not(:disabled) {
+  scale: 0.96;
+}
 button.port {
   display: inline;
   padding: 0;
@@ -1106,6 +1156,8 @@ th.num, td.num {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0;
+  /* Counts change while the window is open; equal digits keep them still. */
+  font-variant-numeric: tabular-nums;
 }
 .badge.warn { background: var(--warn); color: var(--on-warn); }
 
@@ -1663,6 +1715,26 @@ input.color-swatch::-webkit-color-swatch { border: 0; border-radius: 2px; }
 .binding-footer .ghost:hover { color: var(--fg); }
 
 /* ---------------------------------------------------------------- motion */
+
+/* Menus and modals arrive rather than pop: a short rise and fade, run once. The
+   exit stays instant on purpose — holding an unmounted menu on screen to
+   animate it away costs more than it explains. The reduced-motion rule below
+   flattens both, and it also covers the spinner. */
+@keyframes rise-in {
+  from { opacity: 0; translate: 0 4px; }
+  to { opacity: 1; translate: 0 0; }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.menu,
+.modal {
+  animation: rise-in 130ms ease-out;
+}
+.modal-back {
+  animation: fade-in 130ms ease-out;
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

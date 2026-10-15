@@ -63,6 +63,13 @@ shipped as.
 
 ### Changed
 
+- The small things that make the window feel finished: menus and modals rise
+  into place instead of appearing, buttons that start something give slightly
+  under the pointer, counts keep their width while they change, panel prose
+  stops leaving a single word on its last line, and a menu's corner is drawn as
+  the padding plus the corner inside it. Icon buttons keep their 26px look but
+  answer to a bigger target where the neighbours allow it, and one surface uses
+  one icon stroke weight.
 - The sidebar opens with every resource group closed, and a group opens itself
   when the view inside it is the one on screen, whether it came from a tab, from
   spotlight or from another window. Group titles are brighter and bolder, with a

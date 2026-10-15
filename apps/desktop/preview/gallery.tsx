@@ -288,6 +288,9 @@ const page = (title: string, body: string, extra = "") => `<!doctype html>
 /* Harness chrome only — never shipped. */
 /* Page chrome only: never override the app's own body colors. */
 body { margin: 0; background: #101114; font: 13px/1.5 ui-sans-serif, system-ui, sans-serif; }
+/* A page is a still frame: the states are already set, so nothing should be
+   caught mid-animation (a menu drawn on load would photograph half faded). */
+*, *::before, *::after { animation: none !important; transition: none !important; }
 .pv-page { padding: 20px; }
 .pv h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #8f97a6; }
 .pv-frame { position: relative; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--bg); }
