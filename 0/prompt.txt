@@ -1,0 +1,1 @@
+watch CRDs: failed to perform initial object list: ServiceError: error reading a body from connection вот такая ошибка при попытке открыть список cr
