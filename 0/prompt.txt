@@ -1,0 +1,1 @@
+я открыл логи argo-application-controller-0 и buildkitd-0, вытянул окно логов buildkitd-0 и когда я вытянул окно логов argo-application-controller-0 оба окна логов начали показывать логи argo-application-controller-0.
