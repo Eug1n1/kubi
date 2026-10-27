@@ -1,0 +1,1 @@
+давай тот managed by который ты сделал переименуем в controlled by, а managed by я хочу чтобы показывал каким argocd application контролируется объект.
