@@ -3,7 +3,55 @@ use std::path::{Path, PathBuf};
 use kubi_core::{Command, CoreHandle, CoreSender};
 use tauri::{Emitter, Manager};
 
+/// GUI launches (Finder, Start menu) hand the process a minimal PATH, so a
+/// kube exec credential plugin (`kubelogin`, `aws-iam-authenticator`,
+/// `gke-gcloud-auth-plugin`, a custom helper…) named by the kubeconfig is not
+/// found: "unable to run auth exec: No such file or directory (os error 2)".
+/// Add the usual binary locations before running so kubectl's plugins keep
+/// working outside a shell. Anything already on PATH stays where it is.
+fn extend_path_for_exec_plugins() -> String {
+    let separator = if cfg!(target_os = "windows") { ';' } else { ':' };
+    let sep = separator.to_string();
+    let current = std::env::var("PATH").unwrap_or_default();
+    let already: Vec<&str> = current.split(separator).filter(|s| !s.is_empty()).collect();
+    let mut extra: Vec<String> = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        extra.push("/opt/homebrew/bin".into());
+        extra.push("/usr/local/bin".into());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        extra.push("/usr/local/bin".into());
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        extra.push(format!("{home}/bin"));
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(home) = std::env::var("USERPROFILE") {
+            extra.push(format!("{home}\\bin"));
+        }
+    }
+    let mut added = Vec::new();
+    for dir in extra {
+        if std::path::Path::new(&dir).is_dir() && !already.iter().any(|old| old == &dir) {
+            added.push(dir);
+        }
+    }
+    if added.is_empty() {
+        return current;
+    }
+    let mut next = added.join(&sep);
+    next.push(separator);
+    next.push_str(&current);
+    next
+}
+
 fn main() {
+    // Give kube exec auth plugins a PATH that kubectl users expect. When
+    // nothing is added this is the current PATH, so the set_var is a no-op.
+    std::env::set_var("PATH", extend_path_for_exec_plugins());
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())

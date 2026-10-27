@@ -9,6 +9,22 @@ The `Unreleased` section holds what is on `main` but not in a release yet; on a
 and publishes them as one release, and the section moves under the version it
 shipped as.
 
+## Unreleased
+
+### Fixed
+
+- The namespace menu gives every namespace one shared width, so a short name
+  highlights across the whole row. A name that does not fit is cut off, and
+  hovering it shows the full name. Text typed to filter the list stays visible
+  on the button.
+
+- Clusters whose kubeconfig authenticates through an exec plugin
+  (`kubelogin`, `aws-iam-authenticator`, `gke-gcloud-auth-plugin`, a custom
+  helper…) now connect from the bundled app: Kubi adds the usual binary
+  locations to `PATH`, so the plugin is found when Kubi is launched from
+  Finder instead of a terminal. A failed connect now also names the cluster
+  it failed for.
+
 ## [0.3.2] - 2026-10-16
 
 ### Changed

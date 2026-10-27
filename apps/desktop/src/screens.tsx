@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Kubi } from "./useKubi";
 import type { ArgoApp, CrTarget, DataEntry, EventInfo, ObjectWarning, PodContainer, PodEnv, PodMount, PodSources, ResourceKind, ResourceRow, View } from "./types";
@@ -27,7 +27,7 @@ import {
   visibleEvents,
   type SearchHit,
 } from "./catalog";
-import { columnKey, columnsFor, compareRows, fieldText, isNumericField, type Field } from "./columns";
+import { columnKey, columnsFor, compareRows, effectiveWidth, fieldText, isNumericField, type Field } from "./columns";
 import { YamlEditor } from "./yamlEditor";
 import { clusterColor, formatAge, formatBytes, formatBytesPair, formatCpu, formatCpuPair, liveAge, previewValue } from "./format";
 import { objectTemplate } from "./templates";
@@ -402,43 +402,113 @@ function NavItem({ label, active, onClick }: { label: string; active: boolean; o
   );
 }
 
+function px(value: string, fallback = 0): number {
+  const n = Number.parseFloat(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const item of a) if (!b.has(item)) return false;
+  return true;
+}
+
+/** A name is cut off when the overflow is more than a rounding pixel. */
+function clipped(el: HTMLElement): boolean {
+  return el.scrollWidth > el.clientWidth + 1;
+}
+
 export function NamespaceSelect({ kubi }: { kubi: Kubi }) {
   const [open, setOpen] = useState(false);
   const [prefix, setPrefix] = useState("");
+  const [box, setBox] = useState<{ width: number; left: number; top: number } | null>(null);
+  const [nameTruncated, setNameTruncated] = useState(false);
+  const [itemTitles, setItemTitles] = useState<ReadonlySet<string>>(() => new Set());
   const root = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const nameRef = useRef<HTMLSpanElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const probeRef = useRef<HTMLButtonElement>(null);
   const current = kubi.activeTab?.namespace ?? null;
+  const label = current ?? "All namespaces";
   const needle = prefix.toLowerCase();
   const shown: (string | null)[] = [];
   if (needle === "") shown.push(null);
   for (const namespace of kubi.namespaces) {
     if (needle === "" || namespace.toLowerCase().startsWith(needle)) shown.push(namespace);
   }
-
-  const positionMenu = () => {
-    const el = buttonRef.current;
-    const target = menuRef.current;
-    if (!el || !target || !open) return;
-    const rect = el.getBoundingClientRect();
-    const menuHeight = target.offsetHeight || 240;
-    target.style.left = `${Math.max(0, rect.left)}px`;
-    let top = rect.bottom + 2;
-    if (rect.bottom + menuHeight > window.innerHeight - 8) {
-      top = rect.top - menuHeight - 2;
-    }
-    target.style.top = `${Math.max(0, Math.min(top, window.innerHeight - menuHeight - 4))}px`;
-    target.style.display = "block";
-  };
+  // Width follows the whole list, so the identity of the names is the dependency,
+  // not the array the parent happens to pass this render.
+  const namespaceKey = kubi.namespaces.join("\0");
 
   const kubiRef = useRef(kubi);
   useEffect(() => {
     kubiRef.current = kubi;
   }, [kubi]);
 
+  useLayoutEffect(() => {
+    const rootEl = root.current;
+    const button = buttonRef.current;
+    const name = nameRef.current;
+    const probe = probeRef.current;
+    const probeMenu = probe?.parentElement;
+    if (!rootEl || !button || !name || !probe || !probeMenu) return;
+    const cap = px(getComputedStyle(rootEl).getPropertyValue("--ns-cap"), 340);
+    const buttonStyle = getComputedStyle(button);
+    const buttonChrome =
+      px(buttonStyle.paddingLeft) +
+      px(buttonStyle.paddingRight) +
+      px(buttonStyle.borderLeftWidth) +
+      px(buttonStyle.borderRightWidth);
+    // scrollWidth is the full name, so a name already cut off at the cap still
+    // counts as the cap rather than as its shortened width.
+    const buttonLabel = Math.min(cap, Math.max(px(buttonStyle.minWidth), Math.ceil(name.scrollWidth + buttonChrome)));
+    const labels = ["All namespaces", ...namespaceKey.split("\0").filter((item) => item !== "")];
+    let longestItem = 0;
+    for (const item of labels) {
+      probe.textContent = item;
+      longestItem = Math.max(longestItem, probe.offsetWidth);
+    }
+    const probeStyle = getComputedStyle(probeMenu);
+    const menuChrome =
+      px(probeStyle.paddingLeft) +
+      px(probeStyle.paddingRight) +
+      px(probeStyle.borderLeftWidth) +
+      px(probeStyle.borderRightWidth);
+    const width = Math.min(cap, Math.max(buttonLabel, Math.ceil(longestItem + menuChrome)));
+    const menu = menuRef.current;
+    // Width before height: the list flips above the button when it would run off the window.
+    if (menu) menu.style.width = `${width}px`;
+    let left = 0;
+    let top = 0;
+    if (menu && open) {
+      const rect = button.getBoundingClientRect();
+      const menuHeight = menu.offsetHeight || 240;
+      left = Math.round(Math.max(0, rect.left));
+      let nextTop = rect.bottom + 2;
+      if (rect.bottom + menuHeight > window.innerHeight - 8) nextTop = rect.top - menuHeight - 2;
+      top = Math.round(Math.max(0, Math.min(nextTop, window.innerHeight - menuHeight - 4)));
+    }
+    const titles = new Set<string>();
+    if (menu) {
+      for (const item of menu.querySelectorAll<HTMLButtonElement>("button")) {
+        if (clipped(item)) titles.add(item.textContent ?? "");
+      }
+    }
+    setBox((prev) => {
+      if (!open && prev && prev.width === width) return prev;
+      if (prev && prev.width === width && prev.left === left && prev.top === top) return prev;
+      return { width, left, top };
+    });
+    setNameTruncated((prev) => {
+      const next = clipped(name);
+      return prev === next ? prev : next;
+    });
+    setItemTitles((prev) => (sameSet(prev, titles) ? prev : titles));
+  }, [open, prefix, label, namespaceKey]);
+
   useEffect(() => {
     if (!open) return;
-    positionMenu();
     const kubi = kubiRef.current;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Backspace") {
@@ -470,45 +540,46 @@ export function NamespaceSelect({ kubi }: { kubi: Kubi }) {
   return (
     <div className="ns" ref={root}>
       <span className="muted">Namespace</span>
-      <button ref={buttonRef} className="current" onClick={() => {
-        setPrefix("");
-        setOpen((value) => !value);
-      }}>
-        {current ?? "All namespaces"}
-        {open && prefix ? `  ${prefix}` : ""}
+      <button
+        ref={buttonRef}
+        className="current"
+        title={nameTruncated ? label : undefined}
+        onClick={() => {
+          setPrefix("");
+          setOpen((value) => !value);
+        }}
+      >
+        <span ref={nameRef} className="ns-name">
+          {label}
+        </span>
+        {open && prefix ? <span className="ns-prefix">{`  ${prefix}`}</span> : null}
       </button>
+      <div className="ns-menu ns-probe" aria-hidden="true">
+        <button ref={probeRef} type="button" tabIndex={-1} />
+      </div>
       {open ? (
         <div
           ref={menuRef}
           className="ns-menu"
-          style={{
-            position: "fixed",
-            zIndex: 1000,
-            maxHeight: "240px",
-            overflowY: "auto",
-            background: "var(--bg)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--r-md)",
-            boxShadow: "var(--shadow)",
-            padding: "var(--sp2)",
-          }}
+          style={box ? { width: box.width, left: box.left, top: box.top } : undefined}
           onClick={(event) => event.stopPropagation()}
           onMouseDown={(event) => event.stopPropagation()}
         >
           {shown.length === 0 ? <div className="muted">No namespaces</div> : null}
           {shown.map((item) => {
-            const label = item ?? "All namespaces";
+            const text = item ?? "All namespaces";
             const on = item === current;
             return (
               <div key={item ?? "__all__"} className="ns-menu-item">
                 <button
                   className={on ? "on" : ""}
+                  title={itemTitles.has(text) ? text : undefined}
                   onClick={() => {
                     kubi.setNamespace(item);
                     setOpen(false);
                   }}
                 >
-                  {label}
+                  {text}
                 </button>
               </div>
             );
@@ -707,22 +778,67 @@ function ObjectTable({ kubi }: { kubi: Kubi }) {
   if (!tab) return null;
   const cols = columnsFor(tab.view);
   const rows = visibleRows(tab);
+  const [resize, setResize] = useState<{
+    colKey: string;
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+  const kubiRef = useRef(kubi);
+  kubiRef.current = kubi;
+
+  useEffect(() => {
+    if (!resize) return;
+    const onMove = (event: PointerEvent) => {
+      const dx = event.clientX - resize.startX;
+      const width = Math.max(40, resize.startWidth + dx);
+      kubiRef.current.resizeCol(resize.colKey, width);
+    };
+    const onUp = () => setResize(null);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [resize]);
+
+  const widths: Record<string, number> = {};
+  for (const col of cols) {
+    widths[columnKey(col.field)] = effectiveWidth(col, tab.colWidths);
+  }
+
   return (
     <div className="table-wrap">
       <table>
         <thead>
           <tr>
-            {cols.map((col) => (
-              <th
-                key={col.title}
-                className={isNumericField(col.field) ? "num" : undefined}
-                style={{ width: col.width }}
-                onClick={() => kubi.toggleSort(columnKey(col.field))}
-              >
-                {col.title}
-                {tab.sortKey === columnKey(col.field) ? (tab.sortAsc ? " ↑" : " ↓") : ""}
-              </th>
-            ))}
+            {cols.map((col, i) => {
+              const colKey = columnKey(col.field);
+              const width = widths[colKey];
+              const isLast = i === cols.length - 1;
+              return (
+                <th
+                  key={col.title}
+                  className={isNumericField(col.field) ? "num" : undefined}
+                  style={{ width, position: "relative" }}
+                  onClick={() => kubi.toggleSort(colKey)}
+                >
+                  {col.title}
+                  {tab.sortKey === colKey ? (tab.sortAsc ? " ↑" : " ↓") : ""}
+                  {!isLast && (
+                    <div
+                      className="col-grip"
+                      onPointerDown={(event) => {
+                        if (event.button !== 0) return;
+                        event.stopPropagation();
+                        event.currentTarget.setPointerCapture(event.pointerId);
+                        setResize({ colKey, startX: event.clientX, startWidth: width });
+                      }}
+                    />
+                  )}
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
@@ -754,13 +870,17 @@ function ObjectTable({ kubi }: { kubi: Kubi }) {
               }}
             >
               {cols.map((col) => {
+                const colKey = columnKey(col.field);
                 const warning = col.field === "name" ? kubi.warning(row) : null;
                 return (
                   <td
                     key={col.title}
                     className={isNumericField(col.field) ? "num" : undefined}
                     title={col.field === "name" ? row.name : undefined}
-                    style={{ width: col.width, color: col.colored ? tone(row.tone) : undefined }}
+                    style={{
+                      width: widths[colKey],
+                      color: col.colored ? tone(row.tone) : undefined,
+                    }}
                   >
                     {col.colored ? <i className="dot" style={{ background: tone(row.tone) }} /> : null}
                     {warning ? <WarningMark warning={warning} /> : null}

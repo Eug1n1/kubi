@@ -32,6 +32,12 @@ export function columnKey(field: Field): string {
   return keyOf(field);
 }
 
+/** Effective width of a column: user override from tab state, or the default weight. */
+export function effectiveWidth(col: Col, colWidths: Record<string, number>): number {
+  const override = colWidths[columnKey(col.field)];
+  return override != null ? override : col.width;
+}
+
 /** Numbers read better right-aligned and in a monospace face. */
 export function isNumericField(field: Field): boolean {
   if (field === "cpu" || field === "memory" || field === "age") return true;

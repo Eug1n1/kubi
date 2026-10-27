@@ -101,6 +101,7 @@ function blankTab(view: View, context: string, namespace: string | null, id: num
     filter: "",
     sortKey: "name",
     sortAsc: true,
+    colWidths: {},
     namespace,
     data: null,
     dataFor: null,
@@ -1864,6 +1865,16 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
           if (i !== index) return item;
           if (item.sortKey === sortKey) return { ...item, sortAsc: !item.sortAsc };
           return { ...item, sortKey, sortAsc: true };
+        }),
+      );
+    },
+    resizeCol: (colKey: string, width: number) => {
+      const index = session.current.active;
+      if (index == null) return;
+      updateTabs((items) =>
+        items.map((item, i) => {
+          if (i !== index) return item;
+          return { ...item, colWidths: { ...item.colWidths, [colKey]: width } };
         }),
       );
     },

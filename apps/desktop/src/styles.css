@@ -676,8 +676,14 @@ p,
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
-.toolbar .ns { position: relative; }
+.toolbar .ns {
+  position: relative;
+  /* Border box of the menu, and of the name on the button before the filter. */
+  --ns-cap: 340px;
+}
 .toolbar .ns .current {
+  display: inline-flex;
+  align-items: center;
   min-width: 128px;
   height: var(--control);
   text-align: left;
@@ -686,38 +692,69 @@ p,
   border: 1px solid var(--border);
   padding: 0 var(--sp2);
 }
-.toolbar .ns menu,
-.toolbar .ns ul {
-  display: block;
-  position: absolute;
-  top: calc(100% + 2px);
-  left: 0;
-  min-width: 100%;
-  max-width: 340px;
+/* The cap is the button's border box. The filter sits outside it, so typing can
+   widen the button without pushing the name out of the way. min-width: 0 lets
+   the name ellipsize inside a flex button. */
+.toolbar .ns .ns-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: calc(var(--ns-cap) - 2 * var(--sp2) - 2px);
+}
+.toolbar .ns .ns-prefix {
+  flex: none;
+  white-space: pre;
+}
+.ns-menu {
+  position: fixed;
+  z-index: 1000;
+  max-width: var(--ns-cap);
+  max-height: 240px;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-top: 0;
   border-radius: var(--r-md);
   padding: var(--sp2);
   box-shadow: var(--shadow);
-  z-index: 10;
-  list-style: none;
-  max-height: 240px;
-  overflow-y: auto;
 }
-.toolbar .ns menu li button {
+.ns-menu button {
+  display: block;
   width: 100%;
   text-align: left;
-  height: var(--control);
   font-family: var(--mono);
   font-size: var(--fs-sm);
-  border: 1px solid var(--border);
-  border-radius: 0;
-  padding: 0 var(--sp2);
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The global button hover is grayer. The current namespace keeps the accent
+   wash while the pointer is on it. */
+.ns-menu button.on,
+.ns-menu button.on:hover,
+.ns-menu button.on:active {
+  background: var(--accent-soft);
   color: var(--fg);
 }
-.toolbar .ns menu li button:hover { background: var(--accent-soft); }
-.toolbar .ns menu li button.on { background: var(--accent-soft); color: var(--fg); font-weight: 600; }
+/* Off screen, shrink-wrapped, so its button reports the width of one full name. */
+.ns-menu.ns-probe {
+  left: -10000px;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+  width: max-content;
+  max-width: none;
+  max-height: none;
+  overflow: visible;
+}
+.ns-menu.ns-probe button {
+  width: max-content;
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+}
 
 /* Menus: the row menu over the table, the context menu over the rail. */
 .menu {
@@ -903,6 +940,18 @@ th {
   white-space: nowrap;
 }
 th:hover { color: var(--muted); }
+/* Resize grip between table columns. Absolutely positioned at the right edge of a th;
+   th gets position: relative from the inline style so the grip stays inside the cell. */
+.col-grip {
+  position: absolute;
+  right: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 2;
+}
+.col-grip:hover { background: var(--accent); }
 td {
   height: var(--row);
   padding: 0 var(--sp3);

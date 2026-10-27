@@ -367,7 +367,7 @@ impl Engine {
         let client = match build_client(self.kubeconfig_path.as_deref(), &context).await {
             Ok(client) => client,
             Err(err) => {
-                self.emit_error(err);
+                self.emit_error(format!("connect {context}: {err}"));
                 return;
             }
         };

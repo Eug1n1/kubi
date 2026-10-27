@@ -489,6 +489,8 @@ export type Tab = {
   filter: string;
   sortKey: string;
   sortAsc: boolean;
+  /** User-adjusted column widths, keyed by column key. Falls back to defaults from columnsFor. */
+  colWidths: Record<string, number>;
   namespace: string | null;
   data: DataEntry[] | null;
   dataFor: string | null;
