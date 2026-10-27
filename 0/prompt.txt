@@ -1,0 +1,7 @@
+<uploaded_documents>
+The following documents have been saved to your filesystem. You can read them using your file-reading tool or other tools:
+- /Users/sh.eugen/.cursor/projects/Users-sh-eugen-Repositories-kubi/uploads/photocraft-0.md
+</uploaded_documents>
+<timestamp>Friday, Oct 9, 2026, 5:47 PM (UTC+3)</timestamp>
+
+все категории по умолчанию закрыто. для разных ресурсов нужны свои поля в таблице (например сейчас в httproute есть cpu, memory колонки). список gateway api ресурсов не полный. так же хочу чтобы ты улучшил внешний вид приложения, сейчас оно выглядит как детская поделка. мне нравится внешний вид этого приложения https://github.com/storytold/photocraft  возьми его за основу.
