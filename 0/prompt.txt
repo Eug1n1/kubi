@@ -1,0 +1,1 @@
+Argo CD overview сделать отдельным от claster overview. Health и Sync хочу видеть ввиде круглого progressbar. хочу чтобы разделы overview были явно отделены друг от друга с помощью границ.
