@@ -1,0 +1,416 @@
+<external_links>
+### Potentially Relevant Websearch Results
+
+You should respond as if these information are known to you. Refrain from saying "I am unable to browse the internet" or "I don't have access to the internet" or "I'm unable to provide real-time news updates". This is your internet search results. Please always cite any links you referenced from the above search results in your response in markdown format.
+
+-------
+Website URL: https://github.com/maziluiosif/oxi
+Website Title: GitHub - maziluiosif/oxi: Native, local-first coding-agent desktop app in Rust (egui) — run any model: local GGUF, Ollama/LM Studio, SSH-tunneled runtimes, hosted APIs, or Claude Code / Cursor / Codex over ACP. No Electron, no cloud lock-in. · GitHub
+Website Content:
+Skip to content 
+
+## Navigation Menu
+
+Sign in
+
+Appearance settings
+
+* Platform  
+   * AI CODE CREATION  
+         * GitHub CopilotWrite better code with AI  
+         * GitHub Copilot appDirect agents from issue to merge  
+         * MCP RegistryIntegrate external tools  
+   * DEVELOPER WORKFLOWS  
+         * ActionsAutomate any workflow  
+         * CodespacesInstant dev environments  
+         * IssuesPlan and track work  
+         * Code ReviewManage code changes  
+         * Code QualityEnforce quality at merge  
+   * APPLICATION SECURITY  
+         * GitHub Advanced SecurityFind and fix vulnerabilities  
+         * Code securitySecure your code as you build  
+         * Secret protectionStop leaks before they start  
+   * EXPLORE  
+         * Why GitHub  
+         * Documentation  
+         * Blog  
+         * Changelog  
+         * Marketplace  
+View all features
+* Solutions  
+   * BY COMPANY SIZE  
+         * Enterprises  
+         * Small and medium teams  
+         * Startups  
+         * Nonprofits  
+   * BY USE CASE  
+         * App Modernization  
+         * DevSecOps  
+         * DevOps  
+         * CI/CD  
+         * View all use cases  
+   * BY INDUSTRY  
+         * Healthcare  
+         * Financial services  
+         * Manufacturing  
+         * Government  
+         * View all industries  
+View all solutions
+* Resources  
+   * EXPLORE BY TOPIC  
+         * AI  
+         * Software Development  
+         * DevOps  
+         * Security  
+         * View all topics  
+   * EXPLORE BY TYPE  
+         * Customer stories  
+         * Events & webinars  
+         * Ebooks & reports  
+         * Business insights  
+         * GitHub Skills  
+   * SUPPORT & SERVICES  
+         * Documentation  
+         * Customer support  
+         * Community forum  
+         * Trust center  
+         * Partners  
+View all resources
+* Open Source  
+   * COMMUNITY  
+         * GitHub SponsorsFund open source developers  
+   * PROGRAMS  
+         * Security Lab  
+         * Maintainer Community  
+         * GitHub Stars  
+         * Archive Program  
+   * REPOSITORIES  
+         * Topics  
+         * Trending  
+         * Collections
+* Enterprise  
+   * ENTERPRISE SOLUTIONS  
+         * Enterprise platformAI-powered developer platform  
+   * AVAILABLE ADD-ONS  
+         * GitHub Advanced SecurityEnterprise-grade security features  
+         * Copilot for BusinessEnterprise-grade AI features  
+         * Premium SupportEnterprise-grade 24/7 support
+* Pricing
+
+Search/
+
+Sign in
+
+Sign up
+
+Appearance settings
+
+You signed in with another tab or window. Reload to refresh your session. You signed out in another tab or window. Reload to refresh your session. You switched accounts on another tab or window. Reload to refresh your session. Dismiss alert 
+
+{{ message }}
+
+1. maziluiosif
+2. oxi
+
+## Repository navigation
+
+* Code
+* Issues5 (5)
+* Pull requests
+* Discussions
+* Actions
+* Projects
+* Security and quality
+* Insights
+
+More items
+
+maziluiosif
+
+**oxi**
+
+Public
+
+* NotificationsYou must be signed in to change notification settings
+* Fork4 (4)
+* Star16 (16)You must be signed in to star a repository
+
+## About
+
+Native, local-first coding-agent desktop app in Rust (egui) — run any model: local GGUF, Ollama/LM Studio, SSH-tunneled runtimes, hosted APIs, or Claude Code / Cursor / Codex over ACP. No Electron, no cloud lock-in.
+
+maziluiosif.github.io/oxi/
+
+### Topics
+
+acpai-assistantcoding-agentdesktop-appeframeeguiggufllama-cppllmlm-studiolocal-firstmcpnativeollamaprivacyrustself-hosted
+
+### Resources
+
+Readme
+
+MIT license
+
+### Contributing
+
+Contributing
+
+Activity
+
+### Stars
+
+**16** stars
+
+### Watchers
+
+**0** watching
+
+### Forks
+
+**4** forks
+
+Report repository
+
+dev
+
+BranchesTags
+
+Go to file
+
+Code
+
+Open more actions menu
+
+## Latest commit
+
+## History
+
+624 Commits
+
+624 Commits
+
+## Folders and files
+
+| Name                                                                           | Name                                                                           | Last commit message | Last commit date |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------- | ---------------- |
+| [.cargo](/maziluiosif/oxi/tree/dev/.cargo ".cargo")                            | [.cargo](/maziluiosif/oxi/tree/dev/.cargo ".cargo")                            |                     |                  |
+| [.claude](/maziluiosif/oxi/tree/dev/.claude ".claude")                         | [.claude](/maziluiosif/oxi/tree/dev/.claude ".claude")                         |                     |                  |
+| [.github](/maziluiosif/oxi/tree/dev/.github ".github")                         | [.github](/maziluiosif/oxi/tree/dev/.github ".github")                         |                     |                  |
+| [assets](/maziluiosif/oxi/tree/dev/assets "assets")                            | [assets](/maziluiosif/oxi/tree/dev/assets "assets")                            |                     |                  |
+| [docs](/maziluiosif/oxi/tree/dev/docs "docs")                                  | [docs](/maziluiosif/oxi/tree/dev/docs "docs")                                  |                     |                  |
+| [scripts](/maziluiosif/oxi/tree/dev/scripts "scripts")                         | [scripts](/maziluiosif/oxi/tree/dev/scripts "scripts")                         |                     |                  |
+| [src](/maziluiosif/oxi/tree/dev/src "src")                                     | [src](/maziluiosif/oxi/tree/dev/src "src")                                     |                     |                  |
+| [.gitattributes](/maziluiosif/oxi/blob/dev/.gitattributes ".gitattributes")    | [.gitattributes](/maziluiosif/oxi/blob/dev/.gitattributes ".gitattributes")    |                     |                  |
+| [.gitignore](/maziluiosif/oxi/blob/dev/.gitignore ".gitignore")                | [.gitignore](/maziluiosif/oxi/blob/dev/.gitignore ".gitignore")                |                     |                  |
+| [CHANGELOG.md](/maziluiosif/oxi/blob/dev/CHANGELOG.md "CHANGELOG.md")          | [CHANGELOG.md](/maziluiosif/oxi/blob/dev/CHANGELOG.md "CHANGELOG.md")          |                     |                  |
+| [CONTRIBUTING.md](/maziluiosif/oxi/blob/dev/CONTRIBUTING.md "CONTRIBUTING.md") | [CONTRIBUTING.md](/maziluiosif/oxi/blob/dev/CONTRIBUTING.md "CONTRIBUTING.md") |                     |                  |
+| [Cargo.lock](/maziluiosif/oxi/blob/dev/Cargo.lock "Cargo.lock")                | [Cargo.lock](/maziluiosif/oxi/blob/dev/Cargo.lock "Cargo.lock")                |                     |                  |
+| [Cargo.toml](/maziluiosif/oxi/blob/dev/Cargo.toml "Cargo.toml")                | [Cargo.toml](/maziluiosif/oxi/blob/dev/Cargo.toml "Cargo.toml")                |                     |                  |
+| [LICENSE](/maziluiosif/oxi/blob/dev/LICENSE "LICENSE")                         | [LICENSE](/maziluiosif/oxi/blob/dev/LICENSE "LICENSE")                         |                     |                  |
+| [README.md](/maziluiosif/oxi/blob/dev/README.md "README.md")                   | [README.md](/maziluiosif/oxi/blob/dev/README.md "README.md")                   |                     |                  |
+| [build.rs](/maziluiosif/oxi/blob/dev/build.rs "build.rs")                      | [build.rs](/maziluiosif/oxi/blob/dev/build.rs "build.rs")                      |                     |                  |
+| View all files                                                                 |                                                                                |                     |                  |
+
+## Repository files navigation
+
+* README
+* Contributing
+* MIT license
+
+More items
+
+# oxi
+
+**The native coding agent for any model.**  
+ Run open models on your own machine, or bring the Claude Code, Codex or Cursor subscription you already pay for.  
+ One Rust binary. No Electron, no account, around 110 MB of RAM.
+
+**Install** ·Website ·Features ·Latest release 
+
+Latest release macOS, Linux and Windows CI MIT license 
+
+A one-minute tour of oxi: local models, providers, the agent fixing a failing test, reviewing the diff, committing, plan mode and themes   
+One-minute tour, recorded from the real app. Watch it in HD. 
+
+## Install
+
+**macOS (Apple Silicon) and Linux (x86\_64):**
+
+curl -fsSL https://maziluiosif.github.io/oxi/install.sh | sh
+
+**Windows (x86\_64), in PowerShell:**
+
+irm https://maziluiosif.github.io/oxi/install.ps1 | iex
+
+Then run `oxi` inside a project folder, or open it from your apps menu. To update, run `oxi update` or the same command again.
+
+Homebrew, manual download, install options 
+
+### Homebrew (macOS, Linux)
+
+brew tap maziluiosif/tap
+brew install --cask oxi
+xattr -cr /Applications/oxi.app   # macOS only, once after installing
+
+### Manual download
+
+Get the archive for your platform from Releases and extract it. On macOS, move `oxi.app` to `/Applications` and run `xattr -cr /Applications/oxi.app` once, because the app is not notarized by Apple. On Windows, click **More info → Run anyway** the first time.
+
+### Install options
+
+| Variable          | Effect                                                          |
+| ----------------- | --------------------------------------------------------------- |
+| OXI\_VERSION      | Install a specific release, e.g. v1.8.0                         |
+| OXI\_BIN\_DIR     | macOS/Linux: where the oxi command goes (default \~/.local/bin) |
+| OXI\_APP\_DIR     | macOS: where oxi.app goes (default /Applications)               |
+| OXI\_INSTALL\_DIR | Windows: install folder (default %LOCALAPPDATA%\\Programs\\oxi) |
+
+Build from source 
+
+You need **Rust 1.92+** (rustup) and C/C++ build tools.
+
+git clone https://github.com/maziluiosif/oxi
+cd oxi
+cargo run --release
+
+#### Windows prerequisites
+
+winget install --id LLVM.LLVM -e
+winget install --id Kitware.CMake -e
+
+Also install Visual Studio Build Tools with the **Desktop development with C++** workload. If the build can't find `libclang`, set:
+
+[Environment]::SetEnvironmentVariable("LIBCLANG_PATH", "C:\Program Files\LLVM\bin", "User")
+
+## Your first five minutes
+
+1. **Open a project.** Run `oxi` in its folder, or use **Open folder…** in the sidebar.
+2. **Pick a model** in Settings → Models & providers:  
+   * **Free and private:** choose **Local HF**, click **Install runtime**, download a model (the usual choice is marked) and click **Run**.  
+   * **Already have Claude Code, Codex or Cursor?** Choose it under External agents and click **Make active**. It uses your existing login.  
+   * **Have an API key?** Paste it under OpenAI, OpenRouter, Anthropic-compatible and others.
+3. **Ask for something real:** _"Run the tests and fix the failing one."_ For bigger changes, type `/plan` first.
+
+## What you get
+
+| [Local HF setup with the runtime installed and a Qwen model running](/maziluiosif/oxi/blob/dev/assets/screenshots/stage-local-models.png) **Local models, set up for you.** Pick a GGUF from HuggingFace and oxi installs llama-server, downloads it and runs it, here or on a GPU box over SSH. LM Studio and Ollama work too. | [Router settings](/maziluiosif/oxi/blob/dev/assets/screenshots/stage-router.png) **Any provider, or all of them.** Claude Code, Codex and Cursor over ACP, ChatGPT sign-in, or any API. The Router picks one per task and switches when a quota runs out.                                      |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [The agent running tests, reading a file and editing it](/maziluiosif/oxi/blob/dev/assets/screenshots/stage-agent.png) **An agent that shows its work.** It reads, searches and edits code, runs commands, searches the web and calls your MCP servers. Edits and commands can ask for approval first.                          | [Side-by-side diff with Stage and Discard buttons on a change](/maziluiosif/oxi/blob/dev/assets/screenshots/stage-review.png) **Review in a real diff editor.** Side by side or inline, editable, with Stage and Discard on every block. Go to definition, find and replace, minimap and tabs. |
+| [Git panel with a new commit in the history](/maziluiosif/oxi/blob/dev/assets/screenshots/stage-git.png) **Git built in.** Stage, commit, branch, compare, pull and push, with AI-written commit messages. A terminal rooted in your workspace sits one click away.                                                             | [A plan with the Implement plan button](/maziluiosif/oxi/blob/dev/assets/screenshots/stage-plan.png) **Plan first, then build.** /plan investigates without changing a file, with a live checklist. One click implements it.                                                                   |
+
+Also: chats saved per workspace, local Whisper voice dictation, web search without an API key (DuckDuckGo, Bing or your SearXNG), custom system prompts, `AGENTS.md` support, and five themes (Dark, Light, Midnight, Sublime, Sublime 4).
+
+## Models and providers
+
+Pick a provider in Settings or from the model picker in the composer.
+
+| Provider                                                         |                                                                             |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| **Local HF**                                                     | oxi downloads a GGUF and runs llama-server for you                          |
+| **Remote HF**                                                    | Same, on another machine over SSH                                           |
+| **LM Studio, Ollama, llama.cpp**                                 | Your own local or LAN server, optionally over SSH                           |
+| **Claude Code, Cursor, Codex**                                   | Uses your existing subscription through ACP                                 |
+| **GPT Codex**                                                    | Sign in with ChatGPT, or use an OpenAI key                                  |
+| **OpenAI, Azure, OpenRouter, OpenCode Go, Anthropic-compatible** | Hosted APIs with your key                                                   |
+| **Router**                                                       | Picks one of your providers per task, and switches if one runs out of quota |
+
+With Router you can also just say it in the chat: _"use Codex for this"_ or _"from now on use Claude Code"_.
+
+Default URLs and environment variables 
+
+| Provider             | Default base URL                                                            | Key from environment                             |
+| -------------------- | --------------------------------------------------------------------------- | ------------------------------------------------ |
+| OpenAI               | https://api.openai.com/v1                                                   | OPENAI\_API\_KEY                                 |
+| Azure OpenAI         | https://YOUR\_RESOURCE.openai.azure.com/openai/deployments/YOUR\_DEPLOYMENT | AZURE\_OPENAI\_API\_KEY                          |
+| OpenRouter           | https://openrouter.ai/api/v1                                                | OPENROUTER\_API\_KEY                             |
+| GPT Codex            | OAuth, or https://api.openai.com/v1 with a key                              | OPENAI\_API\_KEY                                 |
+| OpenCode Go          | https://opencode.ai/zen/go                                                  | OPENCODE\_GO\_API\_KEY, OPENCODE\_API\_KEY       |
+| Custom Anthropic     | http://localhost:8000                                                       | CUSTOM\_ANTHROPIC\_API\_KEY, ANTHROPIC\_API\_KEY |
+| LM Studio            | http://localhost:1234/v1                                                    | LMSTUDIO\_API\_KEY (optional)                    |
+| llama.cpp            | http://localhost:8080/v1                                                    | LLAMA\_API\_KEY (optional)                       |
+| Ollama               | http://localhost:11434/v1                                                   | OLLAMA\_API\_KEY (optional)                      |
+| Local HF / Remote HF | http://127.0.0.1:18080/v1                                                   | none                                             |
+
+ChatGPT sign-in needs port `1455` free for the login callback. The Router's task classifier uses OpenRouter if a key is set, and falls back to local rules otherwise; you can turn it off in Settings → Providers → Router.
+
+## Your data
+
+Everything stays on your machine. Settings live in your config folder (e.g. `~/.config/oxi/settings.json` on Linux), next to the diagnostics log `oxi.log` and, if oxi ever crashes, `crash.log` (Settings → About opens them). API keys, sign-in tokens and SSH passwords go to the system keychain (macOS Keychain, Windows Credential Manager, Secret Service on Linux), never into the settings file.
+
+If a workspace has an `AGENTS.md` at its root, oxi adds it to the agent's instructions.
+
+## Good to know
+
+* Approval prompts are the real safety boundary. Shell commands and MCP tools are not sandboxed.
+* Only point SSH tunnels at machines you control.
+* Image input depends on whether your model supports images.
+
+## Contributing
+
+See CONTRIBUTING.md for building, tests, code layout and PR conventions.
+
+## About
+
+Native, local-first coding-agent desktop app in Rust (egui) — run any model: local GGUF, Ollama/LM Studio, SSH-tunneled runtimes, hosted APIs, or Claude Code / Cursor / Codex over ACP. No Electron, no cloud lock-in.
+
+maziluiosif.github.io/oxi/
+
+### Topics
+
+acpai-assistantcoding-agentdesktop-appeframeeguiggufllama-cppllmlm-studiolocal-firstmcpnativeollamaprivacyrustself-hosted
+
+### Resources
+
+Readme
+
+MIT license
+
+### Contributing
+
+Contributing
+
+Activity
+
+### Stars
+
+**16** stars
+
+### Watchers
+
+**0** watching
+
+### Forks
+
+**4** forks
+
+Report repository
+
+## Releases
+
+## Contributors
+
+## Languages
+
+## Footer
+
+ © 2026 GitHub, Inc. 
+
+### Footer navigation
+
+* Terms
+* Privacy
+* Security
+* Status
+* Community
+* Docs
+* Contact
+* Manage cookies
+* Do not share my personal information
+
+ You can’t perform that action at this time.
+____
+
+</external_links>
+<timestamp>Friday, Oct 9, 2026, 6:45 PM (UTC+3)</timestamp>
+
+мне нравится как выглядит интерфейс здесь попробуй сделать так же но в нашей цветовой палитре. как минимум я здесь вижу красивый список чатов который можно портировать к нам в качестве дерева ресурсов.https://github.com/maziluiosif/oxi
