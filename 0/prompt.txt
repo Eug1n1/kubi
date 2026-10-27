@@ -1,0 +1,1 @@
+в argocd overview нужно сделать Applications не простым списком а scrollable table чтобы были поля с именем heal syncstatus. ещё хочу информацию о applicationsets, repositories, clusters
