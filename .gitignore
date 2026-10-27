@@ -10,6 +10,9 @@ apps/desktop/preview/*.css
 apps/desktop/preview/*.html
 apps/desktop/preview/shots-*/
 
+# Regenerated projection of `entire brain memories files`; facts are edited in the brain, not here.
+/brain-facts/
+
 # Local agent tooling: skills and editor configuration
 .agents/
 .cursor/
