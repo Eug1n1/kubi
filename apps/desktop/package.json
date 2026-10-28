@@ -8,7 +8,11 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "test": "vitest run",
     "tauri": "tauri"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -23,10 +27,12 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
+    "@types/node": "^26.6.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^5",
     "typescript": "^5",
-    "vite": "^7"
+    "vite": "^7",
+    "vitest": "^5.0.5"
   }
 }
