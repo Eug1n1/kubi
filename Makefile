@@ -1,8 +1,11 @@
 # Kubi — desktop Kubernetes client (Tauri 2 + React).
 #
-#   make dev    run the app in dev mode with hot reload
-#   make dmg    build a distributable .dmg
-#   make test   run Rust tests and build the frontend
+#   make dev      run the app in dev mode with hot reload
+#   make dmg      build a distributable .dmg
+#   make verify   everything a change must pass before it is done
+#
+# `make verify` is the gate: format, lint, frontend build, JS tests, Rust tests.
+# `make test` is the same minus format and lint, and is what CI runs per platform.
 
 APP_DIR    := apps/desktop
 NPM        := npm --prefix $(APP_DIR)
@@ -10,7 +13,7 @@ BUNDLE_DMG := target/release/bundle/dmg
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install dev build bundle dmg dmg-styled test preview clean distclean
+.PHONY: help doctor install dev build bundle dmg dmg-styled test verify fmt lint preview shots contrast clean distclean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -49,13 +52,37 @@ bundle: | $(APP_DIR)/node_modules/.bin/tauri ## Build the installers for this pl
 $(APP_DIR)/node_modules/.bin/tauri:
 	$(NPM) install
 
-test: ## Run the frontend build and the Rust tests
+test: ## Run the frontend build, the JS tests and the Rust tests
 	$(NPM) run build
+	$(NPM) test
 	cargo test --workspace
+
+verify: ## Everything a change must pass: format, lint, build, JS and Rust tests
+	cargo fmt --all --check
+	cargo clippy --workspace --all-targets -- -D warnings
+	$(NPM) run build
+	$(NPM) test
+	cargo test --workspace
+
+fmt: ## Format the Rust workspace
+	cargo fmt --all
+
+lint: ## Lint every Rust target; warnings are errors
+	cargo clippy --workspace --all-targets -- -D warnings
+
+doctor: ## Check that this machine can build, test and screenshot the app
+	./scripts/doctor.sh
 
 preview: | $(APP_DIR)/node_modules/.bin/tauri ## Render the visual harness pages into apps/desktop/preview
 	cd $(APP_DIR) && npx esbuild preview/gallery.tsx --bundle --platform=node --format=cjs --outfile=preview/gallery.cjs
 	cd $(APP_DIR) && node preview/gallery.cjs
+
+shots: preview ## Screenshot every harness page (CHROME, SHOT_SIZE, SHOT_OUT to override)
+	cd $(APP_DIR) && node preview/shots.mjs
+
+contrast: ## Check every text/surface pair the stylesheet relies on
+	cd $(APP_DIR) && npx esbuild preview/contrast.ts --bundle --platform=node --format=cjs --outfile=preview/contrast.cjs
+	cd $(APP_DIR) && node preview/contrast.cjs
 
 clean: ## Remove build artifacts
 	cargo clean

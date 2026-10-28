@@ -35,8 +35,21 @@ jobs:
       - name: Install JS dependencies
         run: npm ci --prefix apps/desktop
 
+      # Formatting is checked everywhere because it costs no compile.
+      - name: Check the Rust formatting
+        run: cargo fmt --all --check
+
       - name: Build the front end
         run: npm run build --prefix apps/desktop
 
+      - name: Test the front end
+        run: npm test --prefix apps/desktop
+
       - name: Test the Rust workspace
         run: cargo test --workspace
+
+      # Clippy compiles the whole workspace including the shell, so it runs once,
+      # after the front end exists — the shell's build script reads dist/.
+      - name: Lint the Rust workspace
+        if: runner.os == 'Linux'
+        run: cargo clippy --workspace --all-targets -- -D warnings
