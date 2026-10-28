@@ -25,6 +25,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # rust-toolchain.toml pins a minimal profile, which leaves rustfmt and
+      # clippy out; the checks below need both.
+      - name: Rust toolchain components
+        run: rustup component add rustfmt clippy
+
       # WebKitGTK and friends are what compiling the shell needs on Linux.
       - name: Linux dependencies
         if: runner.os == 'Linux'
