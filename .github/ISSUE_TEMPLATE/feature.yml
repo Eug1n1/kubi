@@ -1,0 +1,24 @@
+name: Feature request
+description: An idea for what Kubi should do — no spec needed yet
+labels: [needs-triage]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is awkward today
+      description: The task you were doing and where the app got in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you would like instead
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What else you tried or considered
+      description: kubectl, another client, a workaround — and why it was not enough.
+    validations:
+      required: false

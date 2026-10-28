@@ -1,0 +1,84 @@
+name: Agent
+
+# An unattended run: an agent picks up an issue labelled `ready-for-agent` and
+# opens a pull request. Nothing here merges — `main` requires a pull request and
+# a green CI run, and the agent works on a branch of its own.
+#
+# Opt-in twice over, which is why it is not wired to every push:
+#   1. it starts only when someone adds the label, or by hand from the Actions
+#      tab with an issue number;
+#   2. it needs a secret to run at all — `ANTHROPIC_API_KEY` (or
+#      `CLAUDE_CODE_OAUTH_TOKEN`) in the repository secrets. Without it the job
+#      fails at the agent step, visibly, and costs nothing.
+#
+# The prompt is short on purpose: the repository states the loop in
+# docs/agents/workflow.md and the rules in AGENTS.md, and both are read by the
+# agent in the checkout rather than repeated here.
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number to work on
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  agent:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'ready-for-agent'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The same prerequisites `make doctor` checks for on a developer's machine.
+      - name: Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev
+
+      - name: Install JS dependencies
+        run: npm ci --prefix apps/desktop
+
+      - name: Rust toolchain components
+        run: rustup component add rustfmt clippy
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          label_trigger: ready-for-agent
+          branch_prefix: agent/
+          settings: .claude/settings.json
+          prompt: |
+            Work the issue this run was triggered for, following
+            docs/agents/workflow.md in the checkout.
+
+            Read AGENTS.md first: it is the map of the code, and its invariants
+            are not negotiable. `make verify` must pass before you call the work
+            done, and `make shots` is how a UI change gets looked at.
+
+            Open a pull request against main using
+            .github/PULL_REQUEST_TEMPLATE.md, filled in — the "how it was
+            verified" section must hold the commands you actually ran and what
+            they printed. Never push to main, never force-push, and never run
+            kubectl: no test in this repository touches a live cluster.
+
+            If the issue cannot be finished — the acceptance criteria conflict,
+            an invariant would have to break, or verification needs something
+            this runner does not have — leave a comment on the issue saying
+            exactly what is missing and open no pull request.

@@ -17,16 +17,22 @@ its own.
 
 | Command | What it does |
 | --- | --- |
+| `make verify` | **The gate.** `cargo fmt --all --check`, clippy with warnings as errors, `npm run build`, `npm test`, `cargo test --workspace` |
+| `make test` | The same minus format and lint: `npm run build` (which is `tsc --noEmit && vite build`), `npm test` (vitest), `cargo test --workspace` |
+| `make doctor` | Checks this machine can build, test and screenshot: Rust, rustfmt, clippy, Node 20+, `node_modules`, a browser |
+| `make fmt` / `make lint` | `cargo fmt --all` / clippy over every target |
 | `make install` | `npm install` in `apps/desktop` |
 | `make dev` | Vite + Tauri with hot reload |
-| `make test` | `npm run build` (which is `tsc --noEmit && vite build`) then `cargo test --workspace` |
 | `make preview` | Renders `apps/desktop/preview/page-*.html` from the visual harness |
+| `make shots` | Screenshots every harness page into `preview/shots-<timestamp>/` (`CHROME`, `SHOT_SIZE`, `SHOT_OUT` override) |
+| `make contrast` | Checks every text/surface pair the stylesheet relies on; non-zero exit on a failing pair |
 | `make dmg` | macOS `.dmg` + `.app` (`dmg-styled` keeps the Finder icon layout) |
 | `make bundle` | The installers for the current platform, from `tauri.conf.json` |
 | `make clean` / `distclean` | Drop build artifacts / also `node_modules` |
 
 Rust is pinned in `rust-toolchain.toml` (1.95.0) and the core is
-`#![forbid(unsafe_code)]`. Node 20+ (CI uses 22).
+`#![forbid(unsafe_code)]`. Node 20+ (CI uses 22, and `.nvmrc` says 22). A warm
+`make verify` takes about fifteen seconds; the first Rust build takes minutes.
 
 ## Where things live
 
@@ -62,12 +68,21 @@ apps/desktop/src/
   yamlEditor.tsx the manifest editor; logWindow.tsx / execWindow.tsx are the
                  detached windows
   templates.ts   the YAML a new object starts from
+  *.test.ts      vitest over the pure modules (format, keymap, prefs, theme,
+                 windows); anything that renders is checked through the harness
 apps/desktop/preview/
   gallery.tsx    the visual harness; contrast.ts checks the palette
+  shots.mjs      screenshots every rendered page, headless
+crates/kubi-core/tests/protocol_mirror.rs
+                 reads model.rs and types.ts and fails when the two disagree
+scripts/doctor.sh  whether this machine can build, test and screenshot
+.github/       CI, the release workflow, the opt-in agent run, issue and PR
+               templates, dependabot
 docs/agents/
-  issue-tracker.md, triage-labels.md, domain.md
+  issue-tracker.md, triage-labels.md, domain.md, workflow.md
                  what the engineering skills read: where issues live, the triage
-                 label vocabulary, and how to use the glossary and ADRs
+                 label vocabulary, how to use the glossary and ADRs, and the loop
+                 from issue to pull request
 ```
 
 ## How a change flows
@@ -81,8 +96,10 @@ docs/agents/
 
 Adding a command or an event touches four places: `model.rs` (plus a line in its
 `serde_tests`), the dispatch match in `engine.rs`, `types.ts`, and the handler in
-`useKubi`. Nothing checks the Rust and TypeScript sides against each other — the
-protocol is mirrored by hand, so keep the names identical.
+`useKubi`. Nothing generates one side from the other — the protocol is mirrored
+by hand — so `crates/kubi-core/tests/protocol_mirror.rs` reads both files and
+fails with the tag that drifted. It covers `Command`, `AppEvent`, `ResourceKind`,
+`StatusTone` and `WatchTarget`; a new enum in the protocol belongs in that test.
 
 Detached log and exec windows talk over their own channels (`log-ready`,
 `log-dock`, `log-close`, `log-pod`, …) with `emitTo`, addressed to the window
@@ -149,16 +166,14 @@ property from a single base color and `applyTheme` writes them onto the root at
 runtime, so a rule should use a token (`var(--fg)`, `var(--hover)`,
 `var(--bg-panel)`, `--sp1..--sp5`, `--r-sm|md|lg`, `--t`, `--t-fast`) and never
 a hex of its own. `preview/contrast.ts` lists every text/surface pair the
-stylesheet relies on with the ratio it needs; run it after touching the palette
-(no Makefile target — bundle it like the harness does):
+stylesheet relies on with the ratio it needs:
 
 ```sh
-cd apps/desktop && npx esbuild preview/contrast.ts --bundle --platform=node \
-  --format=cjs --outfile=preview/contrast.cjs && node preview/contrast.cjs
+make contrast
 ```
 
-It prints PASS/FAIL per theme preset. It does *not* exit non-zero, so read the
-output.
+It prints PASS/FAIL per theme preset and exits non-zero when a pair fails, so it
+is a gate rather than something to read.
 
 Three traps that have cost real time here:
 
@@ -193,22 +208,26 @@ Three traps that have cost real time here:
 
 ## Checking a change
 
-`make test` is the floor: the front end builds only when `tsc --noEmit` is
-happy, and the Rust tests cover the pure logic (row building, quantity
-formatting, YAML masking, warning aggregation, kubeconfig parsing) and the
-engine's bookkeeping (per-context namespaces, watches, stream teardown).
-There is **no JS test runner** — no vitest, no jest — so a UI change is checked
-by types, by the build and by looking at it.
+`make verify` is the floor, and it is one command: `cargo fmt --all --check`,
+clippy with warnings as errors, the front end build (which is `tsc --noEmit &&
+vite build`), the JS tests and the Rust tests. Warm it takes about fifteen
+seconds; `make doctor` says whether this machine can run it at all.
 
-For anything visual:
+The Rust tests cover the pure logic (row building, quantity formatting, YAML
+masking, warning aggregation, kubeconfig parsing) and the engine's bookkeeping
+(per-context namespaces, watches, stream teardown); `protocol_mirror.rs` covers
+the Rust and TypeScript sides agreeing. The JS tests (`vitest`, `*.test.ts` next
+to the module) cover the pure modules only — `format.ts`, `keymap.ts`,
+`prefs.ts`, `theme.ts`, `windows.ts` — because that environment has no DOM and no
+Tauri. Anything that renders is checked by looking at it:
 
 ```sh
-make preview
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
-  --disable-gpu --no-sandbox --virtual-time-budget=2500 --window-size=900,300 \
-  --screenshot=/tmp/shot.png \
-  file://$PWD/apps/desktop/preview/page-menus-context-and-row.html
+make shots     # every harness page, 1200x900, into preview/shots-<timestamp>/
 ```
+
+`make shots` is `make preview` plus a headless Chrome run over each page;
+`CHROME`, `SHOT_SIZE` and `SHOT_OUT` override the browser, the viewport and the
+output directory.
 
 Two things the harness cannot do as it stands, and what to do instead:
 
@@ -242,7 +261,16 @@ A new harness page is a few lines in the `pages` list at the bottom of
   a local `context` in the calling function is invisible inside the macro.
 - **The engine is one file and one `impl`.** Big on purpose: the commands are a
   flat `match` near the top and everything else is grouped by feature below it.
-  Follow that order rather than inventing a module for one function.
+  Follow that order rather than inventing a module for one function. Three
+  functions carry `#[allow(clippy::too_many_arguments)]` — `start_forward`,
+  `start_logs`, `load_detail` — because the dispatch match hands a command's
+  fields over flat; grouping them into a request struct would move the same
+  fields one level down. The allow is a decision, not an oversight.
+- **serde's `camelCase` only lowercases the first letter.** `rename_all =
+  "camelCase"` is not a word splitter: `BackendTLSPolicies` travels as
+  `backendTLSPolicies`, which is what `types.ts` has to spell.
+  `protocol_mirror.rs` fails on the difference, and its `serde_camel_case` test
+  pins the rule.
 - **The Tauri config is per platform.** Installer types come from
   `tauri.conf.json` and its `tauri.windows.conf.json` / `tauri.linux.conf.json`
   companions, so a new one goes into the right companion, not into a workflow
@@ -253,8 +281,9 @@ A new harness page is a few lines in the `pages` list at the bottom of
   the pretty one.
 - **`macos-latest` is arm64**, so a tag publishes an `aarch64.dmg` only: there is
   no Intel or universal build yet.
-- **CI builds bundles only on a tag**; pushes and pull requests run the front end
-  build and the Rust tests on macOS, Linux and Windows.
+- **CI builds bundles only on a tag**; pushes and pull requests check the Rust
+  formatting everywhere, build and test the front end and the Rust workspace on
+  macOS, Linux and Windows, and run clippy once, on Linux.
 - **The bundle identifier and the config directory are linked**: changing the
   identifier in `tauri.conf.json` moves `settings.json` and
   `context-groups.json`.
@@ -278,10 +307,11 @@ A new harness page is a few lines in the `pages` list at the bottom of
   developer. A pure refactor does not need one.
 - **The README is the user's manual and the harness is the visual contract**:
   when behaviour or a screen changes, update them in the same commit.
-- **Tests live next to the code** in a `#[cfg(test)] mod *_tests` at the bottom
-  of the file they cover, and they test pure functions or engine bookkeeping —
-  never a live cluster. A new rule in the protocol gets a line in
-  `model::serde_tests`.
+- **Tests live next to the code** — a `#[cfg(test)] mod *_tests` at the bottom of
+  the Rust file they cover, a `*.test.ts` beside the TypeScript module — and they
+  test pure functions or engine bookkeeping, never a live cluster. A new rule in
+  the protocol gets a line in `model::serde_tests`, and a new enum in it gets a
+  line in `tests/protocol_mirror.rs`.
 
 ## Open threads
 
@@ -301,6 +331,12 @@ A new harness page is a few lines in the `pages` list at the bottom of
   not yet tagged with the cluster it came from.
 
 ## Agent skills
+
+### Work loop
+
+How an issue becomes a pull request: the order to do things in, the command for
+each step, what "done" means, and when to stop and ask instead of guessing. See
+`docs/agents/workflow.md`.
 
 ### Issue tracker
 

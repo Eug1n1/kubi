@@ -66,7 +66,7 @@ end renders what it sends back. It runs on macOS, Windows and Linux.
   in Applications, `xattr -dr com.apple.quarantine /Applications/Kubi.app`.
   Windows SmartScreen warns for the same reason.
 - Rust 1.95.0, pinned in `rust-toolchain.toml`.
-- Node 20 or newer (CI uses 22).
+- Node 20 or newer (CI and `.nvmrc` say 22).
 - Build prerequisites: the Xcode Command Line Tools on macOS; on Linux
   `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev` and
   `patchelf`. Windows needs nothing beyond Rust and Node — WebView2 ships with
@@ -79,10 +79,12 @@ end renders what it sends back. It runs on macOS, Windows and Linux.
 ```sh
 make install   # npm install
 make dev       # Vite dev server plus Tauri, with hot reload
-make test      # tsc and a production build, then cargo test --workspace
+make verify    # the gate: format, lint, front end build, JS tests, Rust tests
 make bundle    # installers for this platform: dmg, msi/nsis or deb/AppImage
 make dmg       # macOS only: the .app and the .dmg
 make preview   # render the visual harness pages (see below)
+make shots     # render them and screenshot each one
+make doctor    # check this machine can build, test and screenshot
 ```
 
 `make` on its own lists every target. Which installers `make bundle` produces
@@ -114,7 +116,8 @@ keeps a list current on its own.
 
 Working on the code? [`AGENTS.md`](AGENTS.md) covers the conventions, the
 invariants worth not breaking and how to check a change — including the parts
-the visual harness cannot show.
+the visual harness cannot show. The loop from an issue to a pull request is in
+[`docs/agents/workflow.md`](docs/agents/workflow.md).
 
 ## Where state lives
 
@@ -165,9 +168,14 @@ screenshot them:
 
 ```sh
 make preview    # writes apps/desktop/preview/page-*.html
+make shots      # renders them and screenshots each one, headless
 ```
 
-The generated pages are ignored by git.
+`make shots` finds Chrome or Chromium on its own — `CHROME` overrides the path,
+`SHOT_SIZE` the viewport and `SHOT_OUT` the directory — and writes
+`preview/shots-<timestamp>/`. `make contrast` checks every text/surface pair the
+stylesheet relies on and fails on one that is too close to read. The generated
+pages and screenshots are ignored by git.
 
 ## Releasing
 

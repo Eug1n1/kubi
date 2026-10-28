@@ -1,0 +1,62 @@
+name: Spec (agent-ready)
+description: A change specified well enough for an agent to implement it without asking
+labels: [needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Fill this in so an agent can pick the issue up unattended. What is left
+        vague becomes a question in the middle of the work, or a wrong guess.
+        Triage moves it to `ready-for-agent` once it holds up.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is wrong or missing today, and who it hurts.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What it should do instead
+      description: The behaviour, not the implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: A list a reviewer can check one by one. Say what must not change, too.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: input
+    id: verification
+    attributes:
+      label: How to verify it
+      description: The command or the screen that shows it working — a harness page from `make shots`, or the test that should exist afterwards.
+    validations:
+      required: true
+  - type: textarea
+    id: where
+    attributes:
+      label: Where it lives
+      description: Files, commands, events, screens — as much as you already know.
+    validations:
+      required: false
+  - type: textarea
+    id: invariants
+    attributes:
+      label: Invariants at risk
+      description: Which AGENTS.md invariants this touches — a cluster is named, connecting is additive, each event is a one-key object, `useKubi()` is the only owner of cluster state — and why the change is safe.
+    validations:
+      required: false
+  - type: textarea
+    id: decisions
+    attributes:
+      label: Decisions already made
+      description: Approaches that were rejected and why, so the work does not repeat them.
+    validations:
+      required: false

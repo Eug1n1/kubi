@@ -11,5 +11,39 @@
         "matcher": "Edit|Write|MultiEdit|NotebookEdit"
       }
     ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(make:*)",
+      "Bash(cargo:*)",
+      "Bash(npm:*)",
+      "Bash(npx:*)",
+      "Bash(node:*)",
+      "Bash(./scripts/doctor.sh:*)",
+      "Bash(gh issue:*)",
+      "Bash(gh pr:*)",
+      "Bash(gh label:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git blame:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git switch:*)",
+      "Bash(git stash:*)"
+    ],
+    "deny": [
+      "Bash(kubectl:*)",
+      "Bash(rm -rf:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)",
+      "Bash(git filter-branch:*)",
+      "Bash(gh repo delete:*)",
+      "Bash(gh release delete:*)",
+      "Bash(gh api -X DELETE:*)"
+    ]
   }
 }

@@ -1,0 +1,45 @@
+name: Bug
+description: Something in Kubi does not work the way it should
+labels: [needs-triage]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: What you see, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a context
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Kubi version
+      description: Settings → About shows it; "dev build" is a fine answer.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Platform
+      options:
+        - macOS
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs, screenshots, cluster shape
+      description: Anything that narrows it down — an error banner, the manifest, how many clusters were open, whether the object was in another namespace.
+    validations:
+      required: false
