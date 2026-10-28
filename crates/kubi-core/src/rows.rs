@@ -98,7 +98,11 @@ pub(crate) fn deployment_row(item: &Deployment) -> ResourceRow {
         None,
     );
     if let Some(workload) = item.status.as_ref() {
-        cell(&mut row, "updated", workload.updated_replicas.unwrap_or(0).to_string());
+        cell(
+            &mut row,
+            "updated",
+            workload.updated_replicas.unwrap_or(0).to_string(),
+        );
         cell(
             &mut row,
             "available",
@@ -138,7 +142,10 @@ fn deployment_strategy(item: &Deployment) -> String {
     };
     let mut parts = vec![kind];
     if let Some(max_unavailable) = &rolling.max_unavailable {
-        parts.push(format!("max unavailable {}", int_or_string(max_unavailable)));
+        parts.push(format!(
+            "max unavailable {}",
+            int_or_string(max_unavailable)
+        ));
     }
     if let Some(max_surge) = &rolling.max_surge {
         parts.push(format!("max surge {}", int_or_string(max_surge)));
@@ -168,17 +175,33 @@ pub(crate) fn statefulset_row(item: &StatefulSet) -> ResourceRow {
         None,
     );
     if let Some(workload) = item.status.as_ref() {
-        cell(&mut row, "current", workload.current_replicas.unwrap_or(0).to_string());
-        cell(&mut row, "updated", workload.updated_replicas.unwrap_or(0).to_string());
+        cell(
+            &mut row,
+            "current",
+            workload.current_replicas.unwrap_or(0).to_string(),
+        );
+        cell(
+            &mut row,
+            "updated",
+            workload.updated_replicas.unwrap_or(0).to_string(),
+        );
     }
     if let Some(spec) = item.spec.as_ref() {
-        cell(&mut row, "service", spec.service_name.clone().unwrap_or_default());
+        cell(
+            &mut row,
+            "service",
+            spec.service_name.clone().unwrap_or_default(),
+        );
         cell(
             &mut row,
             "podManagement",
             spec.pod_management_policy.clone().unwrap_or_default(),
         );
-        cell(&mut row, "images", template_images(spec.template.spec.as_ref()));
+        cell(
+            &mut row,
+            "images",
+            template_images(spec.template.spec.as_ref()),
+        );
     }
     row
 }
@@ -221,11 +244,19 @@ pub(crate) fn daemonset_row(item: &DaemonSet) -> ResourceRow {
             workload.number_available.unwrap_or(0).to_string(),
         );
         if workload.number_misscheduled > 0 {
-            cell(&mut row, "misscheduled", workload.number_misscheduled.to_string());
+            cell(
+                &mut row,
+                "misscheduled",
+                workload.number_misscheduled.to_string(),
+            );
         }
     }
     if let Some(spec) = item.spec.as_ref() {
-        cell(&mut row, "images", template_images(spec.template.spec.as_ref()));
+        cell(
+            &mut row,
+            "images",
+            template_images(spec.template.spec.as_ref()),
+        );
     }
     row
 }
@@ -267,9 +298,21 @@ pub(crate) fn job_row(item: &Job) -> ResourceRow {
         None,
     );
     if let Some(spec) = item.spec.as_ref() {
-        cell(&mut row, "parallelism", spec.parallelism.unwrap_or(1).to_string());
-        cell(&mut row, "backoff", spec.backoff_limit.unwrap_or(6).to_string());
-        cell(&mut row, "images", template_images(spec.template.spec.as_ref()));
+        cell(
+            &mut row,
+            "parallelism",
+            spec.parallelism.unwrap_or(1).to_string(),
+        );
+        cell(
+            &mut row,
+            "backoff",
+            spec.backoff_limit.unwrap_or(6).to_string(),
+        );
+        cell(
+            &mut row,
+            "images",
+            template_images(spec.template.spec.as_ref()),
+        );
     }
     row
 }
@@ -502,12 +545,11 @@ fn ingress_tls(ingress: &Ingress) -> String {
         .as_ref()
         .and_then(|spec| spec.tls.as_ref())
         .map(|items| {
-            lines_of(items.iter().flat_map(|item| {
-                item.hosts
-                    .clone()
-                    .unwrap_or_default()
-                    .into_iter()
-            }))
+            lines_of(
+                items
+                    .iter()
+                    .flat_map(|item| item.hosts.clone().unwrap_or_default().into_iter()),
+            )
         })
         .unwrap_or_default()
 }
@@ -800,7 +842,11 @@ pub(crate) fn networkpolicy_row(item: &NetworkPolicy) -> ResourceRow {
         None,
         None,
     );
-    if let Some(selector) = item.spec.as_ref().and_then(|spec| spec.pod_selector.as_ref()) {
+    if let Some(selector) = item
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.pod_selector.as_ref())
+    {
         cell(&mut row, "selector", label_selector(selector));
     }
     row
@@ -1315,7 +1361,10 @@ fn binding_row(
         meta,
         "Active".to_string(),
         StatusTone::Neutral,
-        subjects.map(|subjects| subjects.len()).unwrap_or(0).to_string(),
+        subjects
+            .map(|subjects| subjects.len())
+            .unwrap_or(0)
+            .to_string(),
         format!("{kind}/{name}"),
         None,
         None,
@@ -1323,14 +1372,14 @@ fn binding_row(
     cell(
         &mut row,
         "subjectList",
-        lines_of(subjects.unwrap_or(&[]).iter().map(|subject| {
-            match subject.namespace.as_deref() {
+        lines_of(subjects.unwrap_or(&[]).iter().map(
+            |subject| match subject.namespace.as_deref() {
                 Some(namespace) if !namespace.is_empty() => {
                     format!("{}/{namespace}/{}", subject.kind, subject.name)
                 }
                 _ => format!("{}/{}", subject.kind, subject.name),
-            }
-        })),
+            },
+        )),
     );
     row
 }
@@ -1630,7 +1679,9 @@ fn selector_line(selector: &BTreeMap<String, String>) -> String {
     pairs.join(", ")
 }
 
-fn label_selector(selector: &k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector) -> String {
+fn label_selector(
+    selector: &k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector,
+) -> String {
     let mut parts = Vec::new();
     if let Some(labels) = &selector.match_labels {
         let mut pairs: Vec<_> = labels
@@ -1705,7 +1756,10 @@ fn listener_lines(data: &serde_json::Value) -> String {
 }
 
 fn listener_line(item: &serde_json::Value) -> Option<String> {
-    let name = item.get("name").and_then(|value| value.as_str()).unwrap_or("");
+    let name = item
+        .get("name")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
     let protocol = item
         .get("protocol")
         .and_then(|value| value.as_str())

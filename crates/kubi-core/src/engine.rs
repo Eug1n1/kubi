@@ -11,17 +11,17 @@ use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet}
 use k8s_openapi::api::autoscaling::v2::HorizontalPodAutoscaler;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
 use k8s_openapi::api::core::v1::{
-    ConfigMap, Container, ContainerStatus, Endpoints, Event, KeyToPath, LimitRange, Namespace, Node,
-    PersistentVolume, PersistentVolumeClaim, Pod, ResourceQuota, Secret, Service,
+    ConfigMap, Container, ContainerStatus, Endpoints, Event, KeyToPath, LimitRange, Namespace,
+    Node, PersistentVolume, PersistentVolumeClaim, Pod, ResourceQuota, Secret, Service,
     ServiceAccount, Volume,
 };
 use k8s_openapi::api::discovery::v1::EndpointSlice;
-use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::api::networking::v1::{Ingress, IngressClass, NetworkPolicy};
 use k8s_openapi::api::policy::v1::PodDisruptionBudget;
 use k8s_openapi::api::rbac::v1::{ClusterRole, ClusterRoleBinding, Role, RoleBinding};
 use k8s_openapi::api::storage::v1::StorageClass;
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
+use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use kube::api::{
     ApiResource, DeleteParams, DynamicObject, ListParams, LogParams, ObjectList, Patch, PatchParams,
@@ -40,8 +40,7 @@ use crate::kubeconfig::{contexts_from, load_kubeconfig, namespace_of};
 use crate::model::{
     AppEvent, ArgoApp, ArgoAppSet, ArgoCluster, ArgoOverview, ArgoRepo, ClusterOverview, Command,
     CrTarget, DataEntry, EventInfo, ObjectWarning, OverviewWarning, PodContainer, PodEnv, PodMount,
-    PodValue,
-    ResourceKind, UsageSample, WatchTarget,
+    PodValue, ResourceKind, UsageSample, WatchTarget,
 };
 use crate::quantity::{parse_bytes, parse_cpu_millis};
 use crate::rows::{
@@ -218,7 +217,9 @@ impl Engine {
             logs: std::collections::HashMap::new(),
             forwards: std::collections::HashMap::new(),
             execs: std::collections::HashMap::new(),
-            argo_cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            argo_cache: std::sync::Arc::new(
+                std::sync::Mutex::new(std::collections::HashMap::new()),
+            ),
         }
     }
 
@@ -303,15 +304,7 @@ impl Engine {
                 previous,
                 timestamps,
             } => self.start_logs(
-                context,
-                id,
-                kind,
-                namespace,
-                name,
-                pod,
-                container,
-                previous,
-                timestamps,
+                context, id, kind, namespace, name, pod, container, previous, timestamps,
             ),
             Command::StopLog { id } => self.stop_log(id),
             Command::StopLogs => self.stop_logs(),
@@ -478,10 +471,20 @@ impl Engine {
                 });
             }
             ResourceKind::Events => {
-                watch_ns!(context.clone(), client, &namespace, kind, Event, event_row, cancel, events);
+                watch_ns!(
+                    context.clone(),
+                    client,
+                    &namespace,
+                    kind,
+                    Event,
+                    event_row,
+                    cancel,
+                    events
+                );
             }
             ResourceKind::Deployments => {
-                watch_ns!(context.clone(), 
+                watch_ns!(
+                    context.clone(),
                     client,
                     &namespace,
                     kind,
@@ -492,7 +495,8 @@ impl Engine {
                 );
             }
             ResourceKind::ReplicaSets => {
-                watch_ns!(context.clone(), 
+                watch_ns!(
+                    context.clone(),
                     client,
                     &namespace,
                     kind,
@@ -503,7 +507,8 @@ impl Engine {
                 );
             }
             ResourceKind::StatefulSets => {
-                watch_ns!(context.clone(), 
+                watch_ns!(
+                    context.clone(),
                     client,
                     &namespace,
                     kind,
@@ -514,7 +519,8 @@ impl Engine {
                 );
             }
             ResourceKind::DaemonSets => {
-                watch_ns!(context.clone(), 
+                watch_ns!(
+                    context.clone(),
                     client,
                     &namespace,
                     kind,
@@ -525,10 +531,20 @@ impl Engine {
                 );
             }
             ResourceKind::Jobs => {
-                watch_ns!(context.clone(), client, &namespace, kind, Job, job_row, cancel, events);
+                watch_ns!(
+                    context.clone(),
+                    client,
+                    &namespace,
+                    kind,
+                    Job,
+                    job_row,
+                    cancel,
+                    events
+                );
             }
             ResourceKind::CronJobs => {
-                watch_ns!(context.clone(), 
+                watch_ns!(
+                    context.clone(),
                     client,
                     &namespace,
                     kind,
@@ -539,7 +555,8 @@ impl Engine {
                 );
             }
             ResourceKind::Services => {
-                watch_ns!(context.clone(), 
+                watch_ns!(
+                    context.clone(),
                     client,
                     &namespace,
                     kind,
@@ -550,7 +567,8 @@ impl Engine {
                 );
             }
             ResourceKind::Endpoints => {
-                watch_ns!(context.clone(), 
+                watch_ns!(
+                    context.clone(),
                     client,
                     &namespace,
                     kind,
@@ -561,7 +579,8 @@ impl Engine {
                 );
             }
             ResourceKind::EndpointSlices => {
-                watch_ns!(context.clone(), 
+                watch_ns!(
+                    context.clone(),
                     client,
                     &namespace,
                     kind,
@@ -572,7 +591,8 @@ impl Engine {
                 );
             }
             ResourceKind::Ingresses => {
-                watch_ns!(context.clone(), 
+                watch_ns!(
+                    context.clone(),
                     client,
                     &namespace,
                     kind,
@@ -583,7 +603,8 @@ impl Engine {
                 );
             }
             ResourceKind::NetworkPolicies => {
-                watch_ns!(context.clone(), 
+                watch_ns!(
+                    context.clone(),
                     client,
                     &namespace,
                     kind,
@@ -594,7 +615,8 @@ impl Engine {
                 );
             }
             ResourceKind::ConfigMaps => {
-                watch_ns!(context.clone(), 
+                watch_ns!(
+                    context.clone(),
                     client,
                     &namespace,
                     kind,
@@ -605,10 +627,20 @@ impl Engine {
                 );
             }
             ResourceKind::Secrets => {
-                watch_ns!(context.clone(), client, &namespace, kind, Secret, secret_row, cancel, events);
+                watch_ns!(
+                    context.clone(),
+                    client,
+                    &namespace,
+                    kind,
+                    Secret,
+                    secret_row,
+                    cancel,
+                    events
+                );
             }
             ResourceKind::ResourceQuotas => {
-                watch_ns!(context.clone(), 
+                watch_ns!(
+                    context.clone(),
                     client,
                     &namespace,
                     kind,
@@ -619,7 +651,8 @@ impl Engine {
                 );
             }
             ResourceKind::LimitRanges => {
-                watch_ns!(context.clone(), 
+                watch_ns!(
+                    context.clone(),
                     client,
                     &namespace,
                     kind,
@@ -630,7 +663,8 @@ impl Engine {
                 );
             }
             ResourceKind::HorizontalPodAutoscalers => {
-                watch_ns!(context.clone(), 
+                watch_ns!(
+                    context.clone(),
                     client,
                     &namespace,
                     kind,
@@ -641,7 +675,8 @@ impl Engine {
                 );
             }
             ResourceKind::PodDisruptionBudgets => {
-                watch_ns!(context.clone(), 
+                watch_ns!(
+                    context.clone(),
                     client,
                     &namespace,
                     kind,
@@ -652,7 +687,8 @@ impl Engine {
                 );
             }
             ResourceKind::PersistentVolumeClaims => {
-                watch_ns!(context.clone(), 
+                watch_ns!(
+                    context.clone(),
                     client,
                     &namespace,
                     kind,
@@ -663,7 +699,8 @@ impl Engine {
                 );
             }
             ResourceKind::ServiceAccounts => {
-                watch_ns!(context.clone(), 
+                watch_ns!(
+                    context.clone(),
                     client,
                     &namespace,
                     kind,
@@ -674,10 +711,20 @@ impl Engine {
                 );
             }
             ResourceKind::Roles => {
-                watch_ns!(context.clone(), client, &namespace, kind, Role, role_row, cancel, events);
+                watch_ns!(
+                    context.clone(),
+                    client,
+                    &namespace,
+                    kind,
+                    Role,
+                    role_row,
+                    cancel,
+                    events
+                );
             }
             ResourceKind::RoleBindings => {
-                watch_ns!(context.clone(), 
+                watch_ns!(
+                    context.clone(),
                     client,
                     &namespace,
                     kind,
@@ -688,22 +735,63 @@ impl Engine {
                 );
             }
             ResourceKind::Namespaces => {
-                watch_cluster!(context.clone(), client, kind, Namespace, namespace_row, cancel, events);
+                watch_cluster!(
+                    context.clone(),
+                    client,
+                    kind,
+                    Namespace,
+                    namespace_row,
+                    cancel,
+                    events
+                );
             }
             ResourceKind::IngressClasses => {
-                watch_cluster!(context.clone(), client, kind, IngressClass, ingressclass_row, cancel, events);
+                watch_cluster!(
+                    context.clone(),
+                    client,
+                    kind,
+                    IngressClass,
+                    ingressclass_row,
+                    cancel,
+                    events
+                );
             }
             ResourceKind::PersistentVolumes => {
-                watch_cluster!(context.clone(), client, kind, PersistentVolume, pv_row, cancel, events);
+                watch_cluster!(
+                    context.clone(),
+                    client,
+                    kind,
+                    PersistentVolume,
+                    pv_row,
+                    cancel,
+                    events
+                );
             }
             ResourceKind::StorageClasses => {
-                watch_cluster!(context.clone(), client, kind, StorageClass, storageclass_row, cancel, events);
+                watch_cluster!(
+                    context.clone(),
+                    client,
+                    kind,
+                    StorageClass,
+                    storageclass_row,
+                    cancel,
+                    events
+                );
             }
             ResourceKind::ClusterRoles => {
-                watch_cluster!(context.clone(), client, kind, ClusterRole, clusterrole_row, cancel, events);
+                watch_cluster!(
+                    context.clone(),
+                    client,
+                    kind,
+                    ClusterRole,
+                    clusterrole_row,
+                    cancel,
+                    events
+                );
             }
             ResourceKind::ClusterRoleBindings => {
-                watch_cluster!(context.clone(), 
+                watch_cluster!(
+                    context.clone(),
                     client,
                     kind,
                     ClusterRoleBinding,
@@ -777,8 +865,7 @@ impl Engine {
             return;
         };
         let cancel = CancellationToken::new();
-        self.catalogs
-            .insert(context.to_string(), cancel.clone());
+        self.catalogs.insert(context.to_string(), cancel.clone());
         spawn_catalog(client, context.to_string(), cancel, self.events.clone());
     }
 
@@ -862,6 +949,10 @@ impl Engine {
         }
     }
 
+    // The stream handlers take the command payload as plain arguments, the way
+    // the dispatch match reads it; a request struct would only move the same
+    // fields one level down.
+    #[allow(clippy::too_many_arguments)]
     fn start_forward(
         &mut self,
         context: String,
@@ -1003,6 +1094,9 @@ impl Engine {
         let _ = slot.input.send(ExecMsg::Resize { cols, rows });
     }
 
+    // See start_forward: the flat argument list is how the dispatch match reads
+    // the command.
+    #[allow(clippy::too_many_arguments)]
     fn start_logs(
         &mut self,
         context: String,
@@ -1132,7 +1226,11 @@ impl Engine {
         tokio::spawn(async move {
             match object_events(&client, &namespace, &name, &uid).await {
                 Ok(list) => {
-                    let _ = events.send(AppEvent::ObjectEvents { context, uid, events: list });
+                    let _ = events.send(AppEvent::ObjectEvents {
+                        context,
+                        uid,
+                        events: list,
+                    });
                 }
                 Err(err) => {
                     let _ = events.send(AppEvent::Error(format!("events {name}: {err}")));
@@ -2390,7 +2488,7 @@ async fn object_events(
             found
         }
     };
-    listed.sort_by_key(|event| event_time_age(event));
+    listed.sort_by_key(event_time_age);
     let mut events: Vec<EventInfo> = listed.iter().map(to_event_info).collect();
     sort_events(&mut events);
     events.truncate(EVENT_LIMIT);
@@ -2399,10 +2497,7 @@ async fn object_events(
 
 fn to_event_info(event: &Event) -> EventInfo {
     EventInfo {
-        kind: event
-            .type_
-            .clone()
-            .unwrap_or_else(|| "Normal".to_string()),
+        kind: event.type_.clone().unwrap_or_else(|| "Normal".to_string()),
         reason: event.reason.clone().unwrap_or_default(),
         message: event.message.clone().unwrap_or_default(),
         count: event
@@ -2444,7 +2539,9 @@ fn is_probe_warning(event: &Event) -> bool {
         return true;
     }
     message.contains("probe")
-        && (message.contains("failed") || message.contains("errored") || message.contains("timed out"))
+        && (message.contains("failed")
+            || message.contains("errored")
+            || message.contains("timed out"))
 }
 
 /// How many objects with warnings the list scan reports.
@@ -3128,32 +3225,59 @@ fn mount_values(
 ) -> (Vec<PodValue>, Option<String>) {
     let mut values = Vec::new();
     let mut notes = Vec::new();
-    match &volume.config_map {
-        Some(map) => {
-            let keys = item_keys(map.items.as_deref());
-            collect_config_map(config_maps.get(&map.name), &map.name, keys.as_deref(), &mut values, &mut notes);
-        }
-        None => {}
+    if let Some(map) = &volume.config_map {
+        let keys = item_keys(map.items.as_deref());
+        collect_config_map(
+            config_maps.get(&map.name),
+            &map.name,
+            keys.as_deref(),
+            &mut values,
+            &mut notes,
+        );
     }
     if let Some(secret) = &volume.secret {
         let name = secret.secret_name.clone().unwrap_or_default();
         let keys = item_keys(secret.items.as_deref());
-        collect_secret(secrets.get(&name), &name, keys.as_deref(), reveal, &mut values, &mut notes);
+        collect_secret(
+            secrets.get(&name),
+            &name,
+            keys.as_deref(),
+            reveal,
+            &mut values,
+            &mut notes,
+        );
     }
     if let Some(projected) = &volume.projected {
         for source in projected.sources.iter().flatten() {
             if let Some(map) = &source.config_map {
                 let keys = item_keys(map.items.as_deref());
-                collect_config_map(config_maps.get(&map.name), &map.name, keys.as_deref(), &mut values, &mut notes);
+                collect_config_map(
+                    config_maps.get(&map.name),
+                    &map.name,
+                    keys.as_deref(),
+                    &mut values,
+                    &mut notes,
+                );
             }
             if let Some(secret) = &source.secret {
                 let name = secret.name.clone();
                 let keys = item_keys(secret.items.as_deref());
-                collect_secret(secrets.get(&name), &name, keys.as_deref(), reveal, &mut values, &mut notes);
+                collect_secret(
+                    secrets.get(&name),
+                    &name,
+                    keys.as_deref(),
+                    reveal,
+                    &mut values,
+                    &mut notes,
+                );
             }
         }
     }
-    let note = if notes.is_empty() { None } else { Some(notes.join("; ")) };
+    let note = if notes.is_empty() {
+        None
+    } else {
+        Some(notes.join("; "))
+    };
     (values, note)
 }
 
@@ -3211,12 +3335,8 @@ fn collect_secret(
 }
 
 fn config_entries(map: &ConfigMap) -> Vec<(String, String)> {
-    let mut entries: Vec<(String, String)> = map
-        .data
-        .clone()
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
+    let mut entries: Vec<(String, String)> =
+        map.data.clone().unwrap_or_default().into_iter().collect();
     if let Some(binary) = &map.binary_data {
         for (key, bytes) in binary {
             entries.push((key.clone(), base64_encode(&bytes.0)));
@@ -3335,7 +3455,9 @@ fn pod_sources(
                 path: mount.mount_path.clone(),
                 read_only: mount.read_only.unwrap_or(false),
                 sub_path: mount.sub_path.clone(),
-                source: volume.map(volume_label).unwrap_or_else(|| "missing".to_string()),
+                source: volume
+                    .map(volume_label)
+                    .unwrap_or_else(|| "missing".to_string()),
                 values,
                 note,
             });
@@ -3495,7 +3617,12 @@ fn pod_containers(
         .status
         .as_ref()
         .and_then(|status| status.container_statuses.as_deref())
-        .map(|statuses| statuses.iter().map(|item| (item.name.clone(), item)).collect())
+        .map(|statuses| {
+            statuses
+                .iter()
+                .map(|item| (item.name.clone(), item))
+                .collect()
+        })
         .unwrap_or_default();
 
     let regular = spec.map(|spec| spec.containers.as_slice()).unwrap_or(&[]);
@@ -3688,11 +3815,13 @@ async fn load_referenced(
     let config_maps: BTreeMap<String, ConfigMap> = maps.into_iter().flatten().collect();
 
     let secret_api = Api::<Secret>::namespaced(client.clone(), namespace);
-    let found = futures::future::join_all(
-        wanted_secrets
-            .iter()
-            .map(|item| async { secret_api.get(item).await.map(|secret| (item.clone(), secret)).ok() }),
-    )
+    let found = futures::future::join_all(wanted_secrets.iter().map(|item| async {
+        secret_api
+            .get(item)
+            .await
+            .map(|secret| (item.clone(), secret))
+            .ok()
+    }))
     .await;
     let secrets: BTreeMap<String, Secret> = found.into_iter().flatten().collect();
     (config_maps, secrets)
@@ -3825,6 +3954,9 @@ fn yaml_documents(raw: &str) -> Vec<String> {
     docs
 }
 
+// The detail fetchers take one command's worth of fields as arguments, matching
+// how the engine's dispatch hands them over.
+#[allow(clippy::too_many_arguments)]
 async fn load_detail(
     client: Client,
     context: String,
@@ -3861,7 +3993,11 @@ async fn load_detail(
                 yaml,
             });
             if let Some(entries) = entries {
-                let _ = events.send(AppEvent::ObjectData { context, uid, entries });
+                let _ = events.send(AppEvent::ObjectData {
+                    context,
+                    uid,
+                    entries,
+                });
             }
         }
         Err(err) => {
@@ -4419,7 +4555,13 @@ mod event_tests {
     #[test]
     fn limit_is_bounded() {
         let mut events: Vec<EventInfo> = (0..EVENT_LIMIT + 20)
-            .map(|index| to_event_info(&event(&format!("R{index}"), "Normal", Some(ago(index as i64)))))
+            .map(|index| {
+                to_event_info(&event(
+                    &format!("R{index}"),
+                    "Normal",
+                    Some(ago(index as i64)),
+                ))
+            })
             .collect();
         sort_events(&mut events);
         events.truncate(EVENT_LIMIT);
@@ -4736,7 +4878,10 @@ mod source_tests {
     #[test]
     fn reads_only_the_referenced_objects() {
         let (maps, secrets) = pod_references(&pod());
-        assert_eq!(maps.into_iter().collect::<Vec<_>>(), ["absent", "app-config"]);
+        assert_eq!(
+            maps.into_iter().collect::<Vec<_>>(),
+            ["absent", "app-config"]
+        );
         assert_eq!(secrets.into_iter().collect::<Vec<_>>(), ["db-creds"]);
     }
 
@@ -4755,7 +4900,11 @@ mod source_tests {
         assert_eq!(config.source, "configMap app-config");
         assert!(!config.read_only);
         assert_eq!(
-            config.values.iter().map(|item| item.key.as_str()).collect::<Vec<_>>(),
+            config
+                .values
+                .iter()
+                .map(|item| item.key.as_str())
+                .collect::<Vec<_>>(),
             ["FEATURE_FLAG", "LOG_LEVEL"]
         );
         assert_eq!(config.values[0].value, "on");
@@ -4774,7 +4923,11 @@ mod source_tests {
         assert_eq!(projected.source, "projected");
         // Only the key named in `items` plus the whole secret.
         assert_eq!(
-            projected.values.iter().map(|item| item.key.as_str()).collect::<Vec<_>>(),
+            projected
+                .values
+                .iter()
+                .map(|item| item.key.as_str())
+                .collect::<Vec<_>>(),
             ["FEATURE_FLAG", "password"]
         );
 
@@ -4982,12 +5135,9 @@ mod container_tests {
         assert!(app.ready);
         assert_eq!(app.restarts, 3);
         assert_eq!(app.requests.get("cpu").map(String::as_str), Some("50m"));
-        assert_eq!(
-            app.requests.get("memory").map(String::as_str),
-            Some("64Mi")
-        );
+        assert_eq!(app.requests.get("memory").map(String::as_str), Some("64Mi"));
         assert_eq!(app.limits.get("cpu").map(String::as_str), Some("1"));
-        assert!(app.limits.get("memory").is_none());
+        assert!(!app.limits.contains_key("memory"));
 
         assert_eq!(app.env[0].name, "MODE");
         assert_eq!(app.env[0].value, "prod");
@@ -5122,7 +5272,11 @@ mod session_tests {
         let prod = CancellationToken::new();
         engine.watches.insert("dev".into(), dev.clone());
         engine.watches.insert("prod".into(), prod.clone());
-        engine.handle(Command::StopWatch { context: "dev".into() }).await;
+        engine
+            .handle(Command::StopWatch {
+                context: "dev".into(),
+            })
+            .await;
         assert!(dev.is_cancelled());
         assert!(!prod.is_cancelled());
     }
@@ -5134,7 +5288,9 @@ mod session_tests {
         let prod_watch = CancellationToken::new();
         engine.watches.insert("dev".into(), dev_watch.clone());
         engine.watches.insert("prod".into(), prod_watch.clone());
-        engine.namespaces.insert("dev".into(), Some("team-a".into()));
+        engine
+            .namespaces
+            .insert("dev".into(), Some("team-a".into()));
         engine.logs.insert(
             1,
             LiveStream {

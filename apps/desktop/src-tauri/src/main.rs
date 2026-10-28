@@ -10,7 +10,11 @@ use tauri::{Emitter, Manager};
 /// Add the usual binary locations before running so kubectl's plugins keep
 /// working outside a shell. Anything already on PATH stays where it is.
 fn extend_path_for_exec_plugins() -> String {
-    let separator = if cfg!(target_os = "windows") { ';' } else { ':' };
+    let separator = if cfg!(target_os = "windows") {
+        ';'
+    } else {
+        ':'
+    };
     let sep = separator.to_string();
     let current = std::env::var("PATH").unwrap_or_default();
     let already: Vec<&str> = current.split(separator).filter(|s| !s.is_empty()).collect();
@@ -60,7 +64,8 @@ fn main() {
             // The updater is desktop-only: it ships no mobile code and its
             // target detection assumes a desktop bundle layout.
             #[cfg(desktop)]
-            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
             let handle = app.handle().clone();
             let core = CoreHandle::spawn();
             app.manage(core.command_sender());
@@ -171,7 +176,9 @@ mod tests {
     #[test]
     fn missing_file_reads_as_none() {
         let dir = temp_dir("missing");
-        assert!(read_config(&dir.join("context-groups.json")).unwrap().is_none());
+        assert!(read_config(&dir.join("context-groups.json"))
+            .unwrap()
+            .is_none());
         assert!(read_config(&dir.join("settings.json")).unwrap().is_none());
         assert!(read_config(&dir.join("themes.json")).unwrap().is_none());
         let _ = std::fs::remove_dir_all(&dir);
