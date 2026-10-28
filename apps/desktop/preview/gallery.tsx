@@ -9,7 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ContextMenuBody, ContextRail } from "../src/contexts";
 import { About, Colors, SettingsModal, type AboutStatus } from "../src/settings";
 import { LogPane } from "../src/logWindow";
-import { ArgoScreen, Detail, OverviewScreen, PinnedSplash, ResourceScreen, RowMenu, SearchModal, Sidebar, TopBar } from "../src/screens";
+import { ArgoScreen, Detail, OverviewScreen, PinnedSplash, ResourceScreen, SearchModal, Sidebar, TopBar } from "../src/screens";
 import { DEFAULT_KEYMAP } from "../src/keymap";
 import { DEFAULT_THEME, BUILTIN_THEMES, themeTokens } from "../src/theme";
 import type { Kubi } from "../src/useKubi";
@@ -104,9 +104,14 @@ const tab = (detailTab: Tab["detailTab"], selected: string | null): Tab =>
     dataFor: null,
     events: selected == null ? null : events,
     eventsFor: selected,
+    sources: null,
+    sourcesFor: null,
+    containers: null,
+    containersFor: null,
     observedAt: Date.now(),
     context: "kz-mgmt",
-  }) as unknown as Tab;
+    colWidths: {},
+  });
 
 const contexts = [
   { name: "kz-mgmt", cluster: "kz-mgmt", namespace: null, current: true },
@@ -247,9 +252,6 @@ const logs: LogSnapshot = {
   previous: false,
   timestamps: true,
 };
-
-const panel = (title: string, body: string, wide = false) =>
-  `<section class="pv"><h3>${title}</h3><div class="pv-frame${wide ? " wide" : ""}">${body}</div></section>`;
 
 const shell = (activeTab: Tab, rail = true) => {
   const kubi = kubiFor(activeTab);
