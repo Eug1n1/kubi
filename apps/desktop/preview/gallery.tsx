@@ -13,7 +13,7 @@ import { ArgoScreen, Detail, OverviewScreen, PinnedSplash, ResourceScreen, Searc
 import { DEFAULT_KEYMAP } from "../src/keymap";
 import { DEFAULT_THEME, BUILTIN_THEMES, themeTokens } from "../src/theme";
 import type { Kubi } from "../src/useKubi";
-import type { ClusterOverview, EventInfo, LogSnapshot, ResourceRow, Tab } from "../src/types";
+import type { ClusterOverview, DetailSection, EventInfo, LogSnapshot, ResourceRow, Tab } from "../src/types";
 
 const row = (
   uid: string,
@@ -59,6 +59,81 @@ const events: EventInfo[] = [
   { kind: "Normal", reason: "Scheduled", message: "Successfully assigned grafana/grafana-deployment-85f7894766-qq7j4 to node-a", count: 1, ageSecs: 900, source: "default-scheduler" },
 ];
 
+/** What the engine reads off the selected pod: the sections the panel stacks. */
+const sections: DetailSection[] = [
+  {
+    title: "Object",
+    rows: [
+      { text: { label: "UID", value: "8f2c1d40-1c4a-4b7e-9f2a-6d5e0a1b3c4d" } },
+      { text: { label: "Resource version", value: "184467" } },
+      {
+        links: {
+          label: "Owner references",
+          links: [
+            {
+              label: "ReplicaSet grafana-deployment-85f7894766",
+              namespace: "grafana",
+              name: "grafana-deployment-85f7894766",
+              target: { kind: "replicaSets" },
+            },
+            { label: "Widget w-1", namespace: "grafana", name: "w-1", target: null },
+          ],
+        },
+      },
+      { list: { label: "Finalizers", items: ["example.com/keep"] } },
+    ],
+  },
+  {
+    title: "Status",
+    rows: [
+      {
+        conditions: {
+          label: "Conditions",
+          conditions: [
+            { name: "PodScheduled", status: "True", tone: "ok", reason: "PodScheduled", message: "", sinceSecs: 86_400 },
+            {
+              name: "Ready",
+              status: "False",
+              tone: "bad",
+              reason: "ContainersNotReady",
+              message: "containers with unready status: [grafana]",
+              sinceSecs: 900,
+            },
+            { name: "ContainersReady", status: "Unknown", tone: "warn", reason: "ContainersNotReady", message: "", sinceSecs: 900 },
+          ],
+        },
+      },
+    ],
+  },
+  {
+    title: "Labels",
+    rows: [
+      {
+        table: {
+          label: "Labels",
+          columns: ["Key", "Value"],
+          rows: [
+            ["app.kubernetes.io/name", "grafana"],
+            ["pod-template-hash", "85f7894766"],
+          ],
+        },
+      },
+    ],
+  },
+  {
+    title: "Annotations",
+    rows: [
+      {
+        table: {
+          label: "Annotations",
+          columns: ["Key", "Value"],
+          rows: [["kubectl.kubernetes.io/restartedAt", "2026-01-01T00:00:00Z"]],
+        },
+      },
+    ],
+  },
+];
+
 const overview: ClusterOverview = {
   context: "kz-mgmt",
   nodesReady: 5,
@@ -102,6 +177,8 @@ const tab = (detailTab: Tab["detailTab"], selected: string | null): Tab =>
     namespace: "grafana",
     data: null,
     dataFor: null,
+    detail: selected == null ? null : sections,
+    detailFor: selected,
     events: selected == null ? null : events,
     eventsFor: selected,
     sources: null,
@@ -350,6 +427,7 @@ const pages: [string, string, string?][] = [
   ["Context window — shell without the rail", shell(tab("overview", null), false)],
   ["Object list — pods", listOnly()],
   ["Detail — overview with warnings", detail("overview")],
+  ["Detail — overview at its narrowest", detail("overview", 280)],
   ["Detail — events", detail("events")],
   ["Overview screen", renderToStaticMarkup(<OverviewScreen kubi={kubiFor(tab("overview", null))} />)],
   ["Argo screen", renderToStaticMarkup(<ArgoScreen kubi={argoKubi()} />)],

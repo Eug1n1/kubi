@@ -51,7 +51,7 @@ import type {
   View,
   WatchTarget,
 } from "./types";
-import { eventKey, eventScope, sameTarget, sameView, watchOf } from "./types";
+import { eventKey, eventScope, sameTarget, sameView, viewOf, watchOf } from "./types";
 import { canExec, canForward, canLogs, canRestart, logTitle, podSettled, viewTitle } from "./catalog";
 
 type HistPoint = { t: number; cpu: number; mem: number };
@@ -105,6 +105,8 @@ function blankTab(view: View, context: string, namespace: string | null, id: num
     namespace,
     data: null,
     dataFor: null,
+    detail: null,
+    detailFor: null,
     events: null,
     eventsFor: null,
     sources: null,
@@ -933,6 +935,8 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
               yamlFor: null,
               data: null,
               dataFor: null,
+              detail: null,
+              detailFor: null,
               events: null,
               eventsFor: null,
               sources: null,
@@ -951,7 +955,7 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
     if (target) void send({ watch: { context: tab.context, target } });
   }
 
-  function openView(view: View, namespace?: string | null) {
+  function openView(view: View, namespace?: string | null, context = session.current.context) {
     if (view.kind === "overview") {
       showHome("cluster");
       return;
@@ -961,7 +965,7 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
       return;
     }
     const existing = session.current.tabs.findIndex(
-      (tab) => tab.context === session.current.context && sameView(tab.view, view),
+      (tab) => tab.context === context && sameView(tab.view, view),
     );
     if (existing >= 0) {
       if (namespace != null && session.current.tabs[existing]?.namespace !== namespace) {
@@ -973,7 +977,7 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
       activate(existing);
       return;
     }
-    const tab = blankTab(view, session.current.context ?? "", namespace === undefined ? inherited() : namespace, session.current.nextId);
+    const tab = blankTab(view, context ?? "", namespace === undefined ? inherited() : namespace, session.current.nextId);
     session.current.nextId += 1;
     commitTabs([...session.current.tabs, tab]);
     activate(session.current.tabs.length - 1);
@@ -984,7 +988,9 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
     if (!pending) return;
     const index = session.current.tabs.findIndex((tab) => {
       const target = watchOf(tab.view);
-      return target != null && sameTarget(target, pending.target);
+      return (
+        tab.context === pending.context && target != null && sameTarget(target, pending.target)
+      );
     });
     if (index < 0) return;
     const row = session.current.tabs[index]?.rows.find(
@@ -1019,6 +1025,8 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
                     yamlFor: null,
                     data: null,
                     dataFor: null,
+                    detail: null,
+                    detailFor: null,
                     events: null,
                     eventsFor: null,
                     sources: null,
@@ -1325,6 +1333,16 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
         items.map((tab) =>
           tab.context === event.objectData.context && tab.selected === event.objectData.uid
             ? { ...tab, data: event.objectData.entries, dataFor: event.objectData.uid }
+            : tab,
+        ),
+      );
+      return;
+    }
+    if (key === "objectDetail" && "objectDetail" in event) {
+      updateTabs((items) =>
+        items.map((tab) =>
+          tab.context === event.objectDetail.context && tab.selected === event.objectDetail.uid
+            ? { ...tab, detail: event.objectDetail.sections, detailFor: event.objectDetail.uid }
             : tab,
         ),
       );
@@ -1996,7 +2014,9 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
       if (index == null) return;
       updateTabs((items) =>
         items.map((item, i) =>
-          i === index ? { ...item, reveal, yaml: null, yamlFor: null, data: null, dataFor: null } : item,
+          i === index
+            ? { ...item, reveal, yaml: null, yamlFor: null, data: null, dataFor: null, detail: null, detailFor: null }
+            : item,
         ),
       );
       requestYaml(index);
@@ -2303,10 +2323,14 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
       if (pods && item.probeOnly && podSettled(row)) return null;
       return item;
     },
-    openNamed: (target: CrTarget, namespace: string, name: string) => {
-      const watch: WatchTarget = { custom: target };
-      session.current.pending = { target: watch, namespace, name };
-      openView({ kind: "custom", target });
+    /**
+     * Opens the view for a target and selects one object in it. The cluster is
+     * named rather than assumed: a link in the detail panel points at the
+     * object's own cluster, which is not always the one on screen.
+     */
+    openNamed: (target: WatchTarget, namespace: string, name: string, context: string) => {
+      session.current.pending = { context, target, namespace, name };
+      openView(viewOf(target), namespace, context);
       selectPending();
     },
   };

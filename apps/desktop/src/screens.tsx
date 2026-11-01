@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Kubi } from "./useKubi";
-import type { ArgoApp, CrTarget, DataEntry, EventInfo, ObjectWarning, PodContainer, PodEnv, PodMount, PodSources, ResourceKind, ResourceRow, View } from "./types";
+import type { ArgoApp, CrTarget, DataEntry, DetailRow, DetailSection, EventInfo, ObjectWarning, PodContainer, PodEnv, PodMount, PodSources, ResourceKind, ResourceRow, View, WatchTarget } from "./types";
+import { conditionReason, orderSections, rowCaption, sectionCount, startsFolded } from "./detail";
 import { bindingKeys } from "./keymap";
 import {
   NAV,
@@ -1067,6 +1068,8 @@ export function Detail({ kubi, width, onWidth }: { kubi: Kubi; width: number; on
             }
             containers={tab.containers}
             containersReady={tab.containersFor === tab.selected}
+            sections={tab.detailFor === tab.selected ? tab.detail : null}
+            onOpen={(target, namespace, name) => kubi.openNamed(target, namespace, name, tab.context)}
           />
         ) : null}
         {tab.detailTab === "yaml" ? (
@@ -1546,6 +1549,9 @@ function Usage({ title, used, total, format }: { title: string; used: number; to
 export function ArgoScreen({ kubi }: { kubi: Kubi }) {
   const argo = kubi.overview?.argo ?? null;
   const waiting = kubi.overview == null || kubi.connecting;
+  // An application lives in the cluster this screen is showing; without one
+  // there is nowhere to open it, so the row is not offered as a link.
+  const context = kubi.context;
   return (
     <div className="center">
       <div className="scroll-page">
@@ -1569,7 +1575,7 @@ export function ArgoScreen({ kubi }: { kubi: Kubi }) {
                     headers={["Name", "Health", "Sync"]}
                     rows={argo.apps.map((app) => ({
                       key: `${app.namespace}/${app.name}`,
-                      onClick: () => kubi.openNamed(argo.target, app.namespace, app.name),
+                      onClick: context == null ? undefined : () => kubi.openNamed({ custom: argo.target }, app.namespace, app.name, context),
                       cells: [
                         { text: objectName(app.namespace, app.name) },
                         { text: app.health, color: statusTone(app.health) },
@@ -1590,7 +1596,7 @@ export function ArgoScreen({ kubi }: { kubi: Kubi }) {
                       const setsTarget = argo.setsTarget;
                       return {
                         key: `${set.namespace}/${set.name}`,
-                        onClick: setsTarget ? () => kubi.openNamed(setsTarget, set.namespace, set.name) : undefined,
+                        onClick: setsTarget && context != null ? () => kubi.openNamed({ custom: setsTarget }, set.namespace, set.name, context) : undefined,
                         cells: [
                           { text: objectName(set.namespace, set.name) },
                           { text: String(set.applications) },
@@ -1756,6 +1762,8 @@ function OverviewTab({
   onServicePort,
   containers,
   containersReady,
+  sections,
+  onOpen,
 }: {
   row: ResourceRow;
   kind: ResourceKind | null;
@@ -1766,6 +1774,8 @@ function OverviewTab({
   onServicePort?: (port: number) => void;
   containers: PodContainer[] | null;
   containersReady: boolean;
+  sections: DetailSection[] | null;
+  onOpen: (target: WatchTarget, namespace: string, name: string) => void;
 }) {
   const facts = resourceFacts(kind, row);
   return (
@@ -1795,6 +1805,11 @@ function OverviewTab({
         {shown(cell(row, "managedBy")) ? <Meta label="Managed by" value={cell(row, "managedBy")} /> : null}
         {shown(row.ready) ? <Meta label="Ready" value={row.ready} /> : null}
       </section>
+      {sections == null ? (
+        <p className="muted">Loading details…</p>
+      ) : (
+        <DetailSections sections={sections} onOpen={onOpen} />
+      )}
       {facts.length > 0 ? (
         <section className="card">
           <h2>{title}</h2>
@@ -1838,8 +1853,6 @@ function OverviewTab({
         </section>
       ) : null}
       {kind === "pods" ? <ContainersCard ready={containersReady} containers={containers} /> : null}
-      <PairFold title="Labels" pairs={row.labels} />
-      <PairFold title="Annotations" pairs={row.annotations} nowrapKey />
     </div>
   );
 }
@@ -2045,25 +2058,150 @@ function mountLabel(mount: PodMount): string {
   return parts.join(" · ");
 }
 
-function PairFold({ title, pairs, nowrapKey = false }: { title: string; pairs: [string, string][]; nowrapKey?: boolean }) {
-  const [open, setOpen] = useState(true);
+/** The sections the engine read from the object, in the order the panel shows them. */
+function DetailSections({
+  sections,
+  onOpen,
+}: {
+  sections: DetailSection[];
+  onOpen: (target: WatchTarget, namespace: string, name: string) => void;
+}) {
+  return (
+    <>
+      {orderSections(sections).map((section) => (
+        <DetailSectionCard key={section.title} section={section} onOpen={onOpen} />
+      ))}
+    </>
+  );
+}
+
+function DetailSectionCard({
+  section,
+  onOpen,
+}: {
+  section: DetailSection;
+  onOpen: (target: WatchTarget, namespace: string, name: string) => void;
+}) {
+  const [open, setOpen] = useState(() => !startsFolded(section.title));
   return (
     <section className="card">
       <button className="fold" onClick={() => setOpen((value) => !value)}>
         <i className={open ? "chevron" : "chevron closed"} />
-        <span>{title}</span>
-        <span className="muted">{pairs.length}</span>
+        <span>{section.title}</span>
+        <span className="muted">{sectionCount(section)}</span>
       </button>
       {open ? (
-        pairs.length === 0 ? (
-          <p className="muted">none</p>
-        ) : (
-          <FactTable columns={["Key", "Value"]} rows={pairs} nowrapFirst={nowrapKey} />
-        )
+        <div>
+          {section.rows.map((row, index) => (
+            <DetailRowView key={index} section={section.title} row={row} onOpen={onOpen} />
+          ))}
+        </div>
       ) : null}
     </section>
   );
 }
+/** One row, drawn the way the engine said to read it. */
+function DetailRowView({
+  section,
+  row,
+  onOpen,
+}: {
+  section: string;
+  row: DetailRow;
+  onOpen: (target: WatchTarget, namespace: string, name: string) => void;
+}) {
+  const caption = (label: string) => rowCaption(section, label);
+  if ("text" in row) {
+    const label = caption(row.text.label);
+    return (
+      <p className="wrap">
+        {label ? <span className="muted">{label} </span> : null}
+        {row.text.value}
+      </p>
+    );
+  }
+  if ("list" in row) {
+    const label = caption(row.list.label);
+    return (
+      <div className="fact-block">
+        {label ? <p className="muted">{label}</p> : null}
+        <ul className="fact-list">
+          {row.list.items.map((item, index) => (
+            <li key={`${item}-${index}`} className="wrap">
+              {item}
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+  if ("table" in row) {
+    const label = caption(row.table.label);
+    return (
+      <div className="fact-block">
+        {label ? <p className="muted">{label}</p> : null}
+        <FactTable columns={row.table.columns} rows={row.table.rows} nowrapFirst />
+      </div>
+    );
+  }
+  if ("links" in row) {
+    const label = caption(row.links.label);
+    return (
+      <div className="fact-block">
+        {label ? <p className="muted">{label}</p> : null}
+        <ul className="fact-list link-list">
+          {row.links.links.map((link) => {
+            const target = link.target;
+            return (
+              <li key={`${link.namespace}/${link.name}`} className="wrap">
+                {target == null ? (
+                  link.label
+                ) : (
+                  <button
+                    type="button"
+                    className="link"
+                    onClick={() => onOpen(target, link.namespace, link.name)}
+                  >
+                    {link.label}
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    );
+  }
+  const label = caption(row.conditions.label);
+  return (
+    <div className="fact-block">
+      {label ? <p className="muted">{label}</p> : null}
+      <ul className="fact-list condition-list">
+        {row.conditions.conditions.map((condition) => {
+          const reason = conditionReason(condition.name, condition.reason);
+          return (
+            <li key={condition.name} className="condition">
+              <i className="dot" style={{ background: tone(condition.tone) }} />
+              <span className="condition-name">{condition.name}</span>
+              <span className="muted">{condition.status}</span>
+              {reason ? <span className="muted">{reason}</span> : null}
+              {condition.sinceSecs != null ? (
+                <span className="muted">{formatAge(condition.sinceSecs)}</span>
+              ) : null}
+              {condition.message ? (
+                <span className="condition-message" title={condition.message}>
+                  {condition.message}
+                </span>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+
 
 type ServicePort = { label: string; port: number; proto: string };
 

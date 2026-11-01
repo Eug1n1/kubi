@@ -416,6 +416,71 @@ pub struct DataEntry {
     pub binary: bool,
 }
 
+/// One block of the detail panel's Overview tab. The engine decides what is in
+/// it; the front end decides where it sits, so a section can arrive without a
+/// layout change on the other side.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetailSection {
+    pub title: String,
+    pub rows: Vec<DetailRow>,
+}
+
+/// A row of a section. The variant says how to read the fields, so the front
+/// end renders what the engine measured instead of deriving it from the object
+/// a second time — the panel and the YAML tab cannot disagree about an object
+/// this way.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum DetailRow {
+    Text {
+        label: String,
+        value: String,
+    },
+    List {
+        label: String,
+        items: Vec<String>,
+    },
+    Table {
+        label: String,
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
+    Links {
+        label: String,
+        links: Vec<DetailLink>,
+    },
+    Conditions {
+        label: String,
+        conditions: Vec<DetailCondition>,
+    },
+}
+
+/// Somewhere the object points at. `target` is absent when the engine cannot
+/// name a view for it — an owner reference to a custom kind carries no plural —
+/// and the front end then shows the name as plain text.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetailLink {
+    pub label: String,
+    pub namespace: String,
+    pub name: String,
+    pub target: Option<WatchTarget>,
+}
+
+/// One entry of `status.conditions`, reduced to what a row can show. `name` is
+/// the condition type (`Ready`); `type` is taken by the Kubernetes field.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetailCondition {
+    pub name: String,
+    pub status: String,
+    pub tone: StatusTone,
+    pub reason: String,
+    pub message: String,
+    pub since_secs: Option<i64>,
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClusterOverview {
@@ -667,6 +732,13 @@ pub enum AppEvent {
         uid: String,
         entries: Vec<DataEntry>,
     },
+    /// The Overview tab's sections, built from the same object the YAML came
+    /// from. Sent together with `Yaml`, so selecting a row costs one read.
+    ObjectDetail {
+        context: String,
+        uid: String,
+        sections: Vec<DetailSection>,
+    },
     ObjectEvents {
         context: String,
         uid: String,
@@ -871,6 +943,50 @@ mod serde_tests {
         assert_eq!(
             serde_json::to_value(Command::StopExec { id: 4 }).unwrap()["stopExec"]["id"],
             4
+        );
+    }
+
+    /// The Overview sections travel as one-key rows, the shape an event already
+    /// uses, under a titled section.
+    #[test]
+    fn object_detail_sections_are_one_key_rows() {
+        let event = AppEvent::ObjectDetail {
+            context: "dev".into(),
+            uid: "1".into(),
+            sections: vec![DetailSection {
+                title: "Object".into(),
+                rows: vec![
+                    DetailRow::Text {
+                        label: "UID".into(),
+                        value: "0f8e".into(),
+                    },
+                    DetailRow::Table {
+                        label: "Labels".into(),
+                        columns: vec!["Key".into(), "Value".into()],
+                        rows: vec![vec!["app".into(), "web".into()]],
+                    },
+                ],
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({
+                "objectDetail": {
+                    "context": "dev",
+                    "uid": "1",
+                    "sections": [{
+                        "title": "Object",
+                        "rows": [
+                            { "text": { "label": "UID", "value": "0f8e" } },
+                            { "table": {
+                                "label": "Labels",
+                                "columns": ["Key", "Value"],
+                                "rows": [["app", "web"]]
+                            } }
+                        ]
+                    }]
+                }
+            })
         );
     }
 }

@@ -24,6 +24,11 @@ A log or exec dock pane moved into its own window; it keeps running when the
 owning window moves to another cluster.
 _Avoid_: context window, separate window
 
+**Detail panel**:
+The pane beside an object list that shows the selected object: what it is, its
+YAML, its events, and what can be done with it.
+_Avoid_: drawer (that is the log and exec dock), inspector, sidebar
+
 **Update**:
 An in-place replacement of the installed app through the updater with a
 restart — not downloading an installer by hand, and not refreshing cluster data.

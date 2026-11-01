@@ -11,6 +11,15 @@ shipped as.
 
 ## Unreleased
 
+### Added
+
+- The detail panel's Overview reads the object itself instead of the object's
+  row in the list, so it now shows what the list cannot: every condition with
+  its status, reason and age; the object's UID and resource version; its
+  finalizers; and its labels and annotations. An owner reference is a link, so
+  a pod opens the ReplicaSet that owns it, and a custom resource gets the same
+  block as a built-in one.
+
 ### Fixed
 
 - The namespace menu gives every namespace one shared width, so a short name

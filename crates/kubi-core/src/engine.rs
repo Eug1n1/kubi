@@ -22,7 +22,7 @@ use k8s_openapi::api::rbac::v1::{ClusterRole, ClusterRoleBinding, Role, RoleBind
 use k8s_openapi::api::storage::v1::StorageClass;
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, Time};
 use kube::api::{
     ApiResource, DeleteParams, DynamicObject, ListParams, LogParams, ObjectList, Patch, PatchParams,
 };
@@ -39,8 +39,9 @@ use tokio_util::sync::CancellationToken;
 use crate::kubeconfig::{contexts_from, load_kubeconfig, namespace_of};
 use crate::model::{
     AppEvent, ArgoApp, ArgoAppSet, ArgoCluster, ArgoOverview, ArgoRepo, ClusterOverview, Command,
-    CrTarget, DataEntry, EventInfo, ObjectWarning, OverviewWarning, PodContainer, PodEnv, PodMount,
-    PodValue, ResourceKind, UsageSample, WatchTarget,
+    CrTarget, DataEntry, DetailCondition, DetailLink, DetailRow, DetailSection, EventInfo,
+    ObjectWarning, OverviewWarning, PodContainer, PodEnv, PodMount, PodValue, ResourceKind,
+    StatusTone, UsageSample, WatchTarget,
 };
 use crate::quantity::{parse_bytes, parse_cpu_millis};
 use crate::rows::{
@@ -2028,7 +2029,7 @@ async fn yaml_for(
     namespace: &str,
     name: &str,
     reveal_secrets: bool,
-) -> Result<String, String> {
+) -> Result<(String, serde_json::Value), String> {
     match kind {
         ResourceKind::Pods => {
             yaml_ns!(client, namespace, name, Pod, "v1", "Pod")
@@ -2263,7 +2264,7 @@ async fn yaml_dynamic(
     namespaced: bool,
     namespace: &str,
     name: &str,
-) -> Result<String, String> {
+) -> Result<(String, serde_json::Value), String> {
     let api = if namespaced && !namespace.is_empty() {
         Api::<DynamicObject>::namespaced_with(client, namespace, resource)
     } else {
@@ -2383,19 +2384,22 @@ where
     }
 }
 
+/// The object's YAML and the object itself: the panel needs both, and reading it
+/// twice would be two round trips to the API server.
 async fn read_yaml<K>(
     api: Api<K>,
     name: &str,
     api_version: &str,
     kind: &str,
     mask_secret: bool,
-) -> Result<String, String>
+) -> Result<(String, serde_json::Value), String>
 where
     K: Resource + Clone + DeserializeOwned + Serialize + std::fmt::Debug + Send + Sync,
 {
     let object = api.get(name).await.map_err(|err| err.to_string())?;
     let value = serde_json::to_value(&object).map_err(|err| err.to_string())?;
-    yaml::object_to_yaml(value, api_version, kind, mask_secret)
+    let yaml = yaml::object_to_yaml(value.clone(), api_version, kind, mask_secret)?;
+    Ok((yaml, value))
 }
 
 async fn build_client(path: Option<&Path>, context: &str) -> Result<Client, String> {
@@ -3976,21 +3980,28 @@ async fn load_detail(
         }
         WatchTarget::Kind(kind) => yaml_for(client, *kind, &namespace, &name, reveal_secrets)
             .await
-            .map(|yaml| (yaml, None)),
+            .map(|(yaml, value)| (yaml, value, None)),
         WatchTarget::Custom(target) => {
             let resource =
                 resource_of(&target.group, &target.version, &target.kind, &target.plural);
             yaml_dynamic(client, &resource, target.namespaced, &namespace, &name)
                 .await
-                .map(|yaml| (yaml, None))
+                .map(|(yaml, value)| (yaml, value, None))
         }
     };
     match loaded {
-        Ok((yaml, entries)) => {
+        Ok((yaml, value, entries)) => {
             let _ = events.send(AppEvent::Yaml {
                 context: context.clone(),
                 uid: uid.clone(),
                 yaml,
+            });
+            // The Overview sections come from the read that just happened, so a
+            // selection costs one request to the API server rather than two.
+            let _ = events.send(AppEvent::ObjectDetail {
+                context: context.clone(),
+                uid: uid.clone(),
+                sections: object_sections(&value, now_secs()),
             });
             if let Some(entries) = entries {
                 let _ = events.send(AppEvent::ObjectData {
@@ -4006,18 +4017,214 @@ async fn load_detail(
     }
 }
 
+/// Seconds since the epoch. The row builder reads the clock the same way, so a
+/// condition's age and a row's age are measured against the same instant.
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// The Overview tab's sections, read from the object rather than from its table
+/// row: a row is a projection of the list, so it can only carry what the list
+/// shows. Every kind gets these, and a custom resource gets them too, because
+/// none of it needs a typed struct.
+fn object_sections(value: &serde_json::Value, now_secs: i64) -> Vec<DetailSection> {
+    let mut sections = Vec::new();
+
+    let mut object = Vec::new();
+    if let Some(uid) = text_at(value, &["metadata", "uid"]) {
+        object.push(DetailRow::Text {
+            label: "UID".into(),
+            value: uid,
+        });
+    }
+    if let Some(version) = text_at(value, &["metadata", "resourceVersion"]) {
+        object.push(DetailRow::Text {
+            label: "Resource version".into(),
+            value: version,
+        });
+    }
+    if let Some(links) = owner_links(value) {
+        object.push(DetailRow::Links {
+            label: "Owner references".into(),
+            links,
+        });
+    }
+    if let Some(finalizers) = string_list_at(value, &["metadata", "finalizers"]) {
+        object.push(DetailRow::List {
+            label: "Finalizers".into(),
+            items: finalizers,
+        });
+    }
+    if !object.is_empty() {
+        sections.push(DetailSection {
+            title: "Object".into(),
+            rows: object,
+        });
+    }
+
+    if let Some(conditions) = conditions_of(value, now_secs) {
+        sections.push(DetailSection {
+            title: "Status".into(),
+            rows: vec![DetailRow::Conditions {
+                label: "Conditions".into(),
+                conditions,
+            }],
+        });
+    }
+
+    for (title, key) in [("Labels", "labels"), ("Annotations", "annotations")] {
+        if let Some(rows) = pairs_at(value, &["metadata", key]) {
+            sections.push(DetailSection {
+                title: title.into(),
+                rows: vec![DetailRow::Table {
+                    label: title.into(),
+                    columns: vec!["Key".into(), "Value".into()],
+                    rows,
+                }],
+            });
+        }
+    }
+
+    sections
+}
+
+/// Every owner reference as a link. A namespaced owner lives in the object's
+/// own namespace and a cluster-scoped one carries none, which is the same
+/// answer the object gives, so the object's namespace is the right one.
+fn owner_links(value: &serde_json::Value) -> Option<Vec<DetailLink>> {
+    let references = value.get("metadata")?.get("ownerReferences")?.as_array()?;
+    let namespace = text_at(value, &["metadata", "namespace"]).unwrap_or_default();
+    let links: Vec<DetailLink> = references
+        .iter()
+        .filter_map(|reference| {
+            let name = reference.get("name")?.as_str()?.to_string();
+            let kind = reference.get("kind")?.as_str()?.to_string();
+            Some(DetailLink {
+                label: format!("{kind} {name}"),
+                namespace: namespace.clone(),
+                name,
+                target: owner_target(&kind).map(WatchTarget::Kind),
+            })
+        })
+        .collect();
+    (!links.is_empty()).then_some(links)
+}
+
+/// The view an owner reference points at, when Kubi has one for that kind.
+///
+/// Not `ResourceKind::manifest` read backwards: the reference carries a kind but
+/// no plural, and only a handful of kinds ever appear as an owner — the workload
+/// controllers, and the Service that owns its EndpointSlices. Everything else
+/// stays plain text, which is also the only thing a custom kind can be.
+fn owner_target(kind: &str) -> Option<ResourceKind> {
+    Some(match kind {
+        "Pod" => ResourceKind::Pods,
+        "ReplicaSet" => ResourceKind::ReplicaSets,
+        "Deployment" => ResourceKind::Deployments,
+        "StatefulSet" => ResourceKind::StatefulSets,
+        "DaemonSet" => ResourceKind::DaemonSets,
+        "Job" => ResourceKind::Jobs,
+        "CronJob" => ResourceKind::CronJobs,
+        "Service" => ResourceKind::Services,
+        "EndpointSlice" => ResourceKind::EndpointSlices,
+        _ => return None,
+    })
+}
+
+/// `status.conditions` as rows. The status word decides the tone: `True` is what
+/// the condition asks for, `False` is a failure, and anything else — an
+/// `Unknown` the controller has not settled on — is worth a look.
+fn conditions_of(value: &serde_json::Value, now_secs: i64) -> Option<Vec<DetailCondition>> {
+    let raw: Vec<RawCondition> =
+        serde_json::from_value(value.get("status")?.get("conditions")?.clone()).ok()?;
+    let conditions: Vec<DetailCondition> = raw
+        .into_iter()
+        .map(|condition| DetailCondition {
+            tone: match condition.status.as_str() {
+                "True" => StatusTone::Ok,
+                "False" => StatusTone::Bad,
+                _ => StatusTone::Warn,
+            },
+            since_secs: condition
+                .last_transition
+                .map(|time| (now_secs - time.0.as_second()).max(0)),
+            name: condition.name,
+            status: condition.status,
+            reason: condition.reason,
+            message: condition.message,
+        })
+        .collect();
+    (!conditions.is_empty()).then_some(conditions)
+}
+
+/// The part of a condition the panel reads. `type` is a keyword, so the field is
+/// named for what it holds.
+#[derive(serde::Deserialize)]
+struct RawCondition {
+    #[serde(rename = "type")]
+    name: String,
+    status: String,
+    #[serde(default)]
+    reason: String,
+    #[serde(default)]
+    message: String,
+    #[serde(default, rename = "lastTransitionTime")]
+    last_transition: Option<Time>,
+}
+
+/// A string field of the object; absent and empty both read as nothing.
+fn text_at(value: &serde_json::Value, path: &[&str]) -> Option<String> {
+    let text = at(value, path)?.as_str()?;
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+/// A list of strings; absent and empty both read as nothing.
+fn string_list_at(value: &serde_json::Value, path: &[&str]) -> Option<Vec<String>> {
+    let items: Vec<String> = at(value, path)?
+        .as_array()?
+        .iter()
+        .filter_map(|item| item.as_str())
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect();
+    (!items.is_empty()).then_some(items)
+}
+
+/// A string map as sorted key/value rows, so two reads of one object agree on
+/// the order; absent and empty both read as nothing.
+fn pairs_at(value: &serde_json::Value, path: &[&str]) -> Option<Vec<Vec<String>>> {
+    let mut rows: Vec<Vec<String>> = at(value, path)?
+        .as_object()?
+        .iter()
+        .filter_map(|(key, value)| {
+            value
+                .as_str()
+                .map(|text| vec![key.clone(), text.to_string()])
+        })
+        .collect();
+    rows.sort();
+    (!rows.is_empty()).then_some(rows)
+}
+
+fn at<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<&'a serde_json::Value> {
+    path.iter().try_fold(value, |at, key| at.get(*key))
+}
+
 async fn load_configmap(
     client: Client,
     namespace: &str,
     name: &str,
-) -> Result<(String, Option<Vec<DataEntry>>), String> {
+) -> Result<(String, serde_json::Value, Option<Vec<DataEntry>>), String> {
     let item = ns_api::<ConfigMap>(client, namespace)
         .get(name)
         .await
         .map_err(|err| err.to_string())?;
     let value = serde_json::to_value(&item).map_err(|err| err.to_string())?;
-    let yaml = crate::yaml::object_to_yaml(value, "v1", "ConfigMap", false)?;
-    Ok((yaml, Some(configmap_entries(&item))))
+    let yaml = crate::yaml::object_to_yaml(value.clone(), "v1", "ConfigMap", false)?;
+    Ok((yaml, value, Some(configmap_entries(&item))))
 }
 
 async fn load_secret(
@@ -4025,14 +4232,14 @@ async fn load_secret(
     namespace: &str,
     name: &str,
     reveal_secrets: bool,
-) -> Result<(String, Option<Vec<DataEntry>>), String> {
+) -> Result<(String, serde_json::Value, Option<Vec<DataEntry>>), String> {
     let item = ns_api::<Secret>(client, namespace)
         .get(name)
         .await
         .map_err(|err| err.to_string())?;
     let value = serde_json::to_value(&item).map_err(|err| err.to_string())?;
-    let yaml = crate::yaml::object_to_yaml(value, "v1", "Secret", !reveal_secrets)?;
-    Ok((yaml, Some(secret_entries(&item, reveal_secrets))))
+    let yaml = crate::yaml::object_to_yaml(value.clone(), "v1", "Secret", !reveal_secrets)?;
+    Ok((yaml, value, Some(secret_entries(&item, reveal_secrets))))
 }
 
 struct ForwardRequest {
@@ -5347,5 +5554,226 @@ mod session_tests {
         // No client was invented for a context that never connected.
         assert!(engine.clients.is_empty());
         assert!(engine.namespaces.is_empty());
+    }
+}
+/// The Overview tab is built from the object, so the section builder is a pure
+/// function of one — `now_secs` is a parameter rather than a call to the clock
+/// so a condition's age can be asserted.
+#[cfg(test)]
+mod detail_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// 2026-01-01T00:00:00Z, the instant every fixture's condition moved at.
+    const THEN: i64 = 1_767_225_600;
+
+    fn section<'a>(sections: &'a [DetailSection], title: &str) -> Option<&'a DetailSection> {
+        sections.iter().find(|section| section.title == title)
+    }
+
+    fn titles(sections: &[DetailSection]) -> Vec<String> {
+        sections.iter().map(|s| s.title.clone()).collect()
+    }
+
+    fn row<'a>(section: &'a DetailSection, label: &str) -> Option<&'a DetailRow> {
+        section.rows.iter().find(|row| match row {
+            DetailRow::Text { label: l, .. }
+            | DetailRow::List { label: l, .. }
+            | DetailRow::Table { label: l, .. }
+            | DetailRow::Links { label: l, .. }
+            | DetailRow::Conditions { label: l, .. } => l == label,
+        })
+    }
+
+    fn pod() -> serde_json::Value {
+        json!({
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {
+                "name": "web-1",
+                "namespace": "team-a",
+                "uid": "0f8e",
+                "resourceVersion": "9142",
+                "labels": { "tier": "front", "app": "web" },
+                "annotations": { "kubectl.kubernetes.io/restartedAt": "2026-01-01T00:00:00Z" },
+                "finalizers": ["example.com/keep"],
+                "ownerReferences": [
+                    {
+                        "apiVersion": "apps/v1",
+                        "kind": "ReplicaSet",
+                        "name": "web-7d9",
+                        "uid": "aa11",
+                        "controller": true
+                    }
+                ]
+            },
+            "status": {
+                "conditions": [
+                    {
+                        "type": "Ready",
+                        "status": "True",
+                        "reason": "ContainersReady",
+                        "message": "",
+                        "lastTransitionTime": "2026-01-01T00:00:00Z"
+                    },
+                    {
+                        "type": "PodScheduled",
+                        "status": "False",
+                        "reason": "Unschedulable",
+                        "message": "0/3 nodes are available",
+                        "lastTransitionTime": "2026-01-01T00:00:00Z"
+                    }
+                ]
+            }
+        })
+    }
+
+    #[test]
+    fn builds_the_meta_rows_of_any_object() {
+        let sections = object_sections(&pod(), THEN);
+        assert_eq!(
+            titles(&sections),
+            ["Object", "Status", "Labels", "Annotations"]
+        );
+
+        let object = section(&sections, "Object").expect("an Object section");
+        assert_eq!(
+            serde_json::to_value(row(object, "UID").expect("UID")).unwrap(),
+            json!({ "text": { "label": "UID", "value": "0f8e" } })
+        );
+        assert_eq!(
+            serde_json::to_value(row(object, "Resource version").expect("a version")).unwrap(),
+            json!({ "text": { "label": "Resource version", "value": "9142" } })
+        );
+        assert_eq!(
+            serde_json::to_value(row(object, "Finalizers").expect("finalizers")).unwrap(),
+            json!({ "list": { "label": "Finalizers", "items": ["example.com/keep"] } })
+        );
+    }
+
+    /// An owner reference carries a kind but no plural, so the engine names the
+    /// view only for the kinds it has one for.
+    #[test]
+    fn points_an_owner_reference_at_the_view_that_can_show_it() {
+        let sections = object_sections(&pod(), THEN);
+        let object = section(&sections, "Object").expect("an Object section");
+        let DetailRow::Links { links, .. } =
+            row(object, "Owner references").expect("owner references")
+        else {
+            panic!("owner references should be links");
+        };
+        assert_eq!(
+            serde_json::to_value(&links[0]).unwrap(),
+            json!({
+                "label": "ReplicaSet web-7d9",
+                "namespace": "team-a",
+                "name": "web-7d9",
+                "target": { "kind": "replicaSets" }
+            })
+        );
+    }
+
+    /// A Service owns its EndpointSlices, so that reference has to link as well.
+    #[test]
+    fn points_a_service_owner_at_the_view_that_can_show_it() {
+        let mut value = pod();
+        value["metadata"]["ownerReferences"] = json!([
+            { "apiVersion": "v1", "kind": "Service", "name": "web", "uid": "bb" }
+        ]);
+        let sections = object_sections(&value, THEN);
+        let object = section(&sections, "Object").expect("an Object section");
+        let DetailRow::Links { links, .. } = row(object, "Owner references").unwrap() else {
+            panic!("owner references should be links");
+        };
+        assert_eq!(
+            links[0].target,
+            Some(WatchTarget::Kind(ResourceKind::Services))
+        );
+    }
+
+    #[test]
+    fn leaves_an_owner_kind_it_cannot_open_unlinked() {
+        let mut value = pod();
+        value["metadata"]["ownerReferences"] = json!([
+            { "apiVersion": "example.com/v1", "kind": "Widget", "name": "w-1", "uid": "bb" }
+        ]);
+        let sections = object_sections(&value, THEN);
+        let object = section(&sections, "Object").expect("an Object section");
+        let DetailRow::Links { links, .. } =
+            row(object, "Owner references").expect("owner references")
+        else {
+            panic!("owner references should be links");
+        };
+        assert_eq!(links[0].target, None);
+        assert_eq!(links[0].label, "Widget w-1");
+    }
+
+    #[test]
+    fn reads_a_condition_into_a_status_a_tone_and_an_age() {
+        let sections = object_sections(&pod(), THEN + 300);
+        let status = section(&sections, "Status").expect("a Status section");
+        let DetailRow::Conditions { conditions, .. } =
+            row(status, "Conditions").expect("conditions")
+        else {
+            panic!("conditions should be a conditions row");
+        };
+        assert_eq!(
+            serde_json::to_value(&conditions[0]).unwrap(),
+            json!({
+                "name": "Ready",
+                "status": "True",
+                "tone": "ok",
+                "reason": "ContainersReady",
+                "message": "",
+                "sinceSecs": 300
+            })
+        );
+        assert_eq!(conditions[1].tone, StatusTone::Bad);
+        assert_eq!(conditions[1].message, "0/3 nodes are available");
+    }
+
+    /// A condition that has never been reported is neither healthy nor broken.
+    #[test]
+    fn calls_an_unknown_condition_a_warning() {
+        let mut value = pod();
+        value["status"]["conditions"][0]["status"] = json!("Unknown");
+        let sections = object_sections(&value, THEN);
+        let status = section(&sections, "Status").expect("a Status section");
+        let DetailRow::Conditions { conditions, .. } = row(status, "Conditions").unwrap() else {
+            panic!("conditions should be a conditions row");
+        };
+        assert_eq!(conditions[0].tone, StatusTone::Warn);
+    }
+
+    #[test]
+    fn lists_labels_and_annotations_sorted_by_key() {
+        let sections = object_sections(&pod(), THEN);
+        let labels = section(&sections, "Labels").expect("a Labels section");
+        assert_eq!(
+            serde_json::to_value(row(labels, "Labels").unwrap()).unwrap(),
+            json!({
+                "table": {
+                    "label": "Labels",
+                    "columns": ["Key", "Value"],
+                    "rows": [["app", "web"], ["tier", "front"]]
+                }
+            })
+        );
+    }
+
+    /// The panel must not invent a section for something the object does not
+    /// carry — an empty Labels block reads as "not loaded".
+    #[test]
+    fn leaves_out_what_the_object_does_not_carry() {
+        let bare = json!({
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": { "name": "team-a", "uid": "cc", "resourceVersion": "7" }
+        });
+        let sections = object_sections(&bare, THEN);
+        assert_eq!(titles(&sections), ["Object"]);
+        let object = section(&sections, "Object").expect("an Object section");
+        assert!(row(object, "Owner references").is_none());
+        assert!(row(object, "Finalizers").is_none());
     }
 }

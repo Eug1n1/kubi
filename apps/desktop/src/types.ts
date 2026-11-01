@@ -345,6 +345,7 @@ export type AppEvent =
   | { metricsUnavailable: { context: string; kind: ResourceKind; message: string } }
   | { yaml: { context: string; uid: string; yaml: string } }
   | { objectData: { context: string; uid: string; entries: DataEntry[] } }
+  | { objectDetail: { context: string; uid: string; sections: DetailSection[] } }
   | { objectEvents: { context: string; uid: string; events: EventInfo[] } }
   | { warnings: { context: string; namespace: string | null; objects: ObjectWarning[] } }
   | { podSources: { context: string; uid: string } & PodSources }
@@ -393,6 +394,48 @@ export type View =
   | { kind: "custom"; target: CrTarget };
 
 export type DetailTab = "overview" | "yaml" | "metrics" | "data" | "events" | "sources";
+
+/**
+ * One block of the Overview tab, built by the engine from the object. The
+ * engine decides what is in it and `detail.ts` decides where it sits.
+ */
+export type DetailSection = {
+  title: string;
+  rows: DetailRow[];
+};
+
+/**
+ * A row of a section. The key says how to read the fields, so the panel renders
+ * what the engine measured instead of reading the object a second time.
+ */
+export type DetailRow =
+  | { text: { label: string; value: string } }
+  | { list: { label: string; items: string[] } }
+  | { table: { label: string; columns: string[]; rows: string[][] } }
+  | { links: { label: string; links: DetailLink[] } }
+  | { conditions: { label: string; conditions: DetailCondition[] } };
+
+/**
+ * Somewhere the object points at. `target` is null when the engine has no view
+ * for it — an owner reference to a custom kind carries no plural — and the row
+ * then shows the name as plain text.
+ */
+export type DetailLink = {
+  label: string;
+  namespace: string;
+  name: string;
+  target: WatchTarget | null;
+};
+
+/** One entry of `status.conditions`, reduced to what a row can show. */
+export type DetailCondition = {
+  name: string;
+  status: string;
+  tone: StatusTone;
+  reason: string;
+  message: string;
+  sinceSecs: number | null;
+};
 
 export type LogSnapshot = {
   kind: ResourceKind;
@@ -494,6 +537,9 @@ export type Tab = {
   namespace: string | null;
   data: DataEntry[] | null;
   dataFor: string | null;
+  /** Overview sections of the object, and the row they were read for. */
+  detail: DetailSection[] | null;
+  detailFor: string | null;
   events: EventInfo[] | null;
   eventsFor: string | null;
   sources: PodSources | null;
@@ -512,6 +558,8 @@ export type PendingDelete = {
 };
 
 export type PendingSelect = {
+  /** The cluster the object lives in, so a link cannot land in the wrong one. */
+  context: string;
   target: WatchTarget;
   namespace: string;
   name: string;
@@ -536,6 +584,7 @@ export function eventScope(event: AppEvent): string | null {
   if ("metricsUnavailable" in event) return event.metricsUnavailable.context;
   if ("yaml" in event) return event.yaml.context;
   if ("objectData" in event) return event.objectData.context;
+  if ("objectDetail" in event) return event.objectDetail.context;
   if ("objectEvents" in event) return event.objectEvents.context;
   if ("warnings" in event) return event.warnings.context;
   if ("podSources" in event) return event.podSources.context;
@@ -557,4 +606,9 @@ export function watchOf(view: View): WatchTarget | null {
   if (view.kind === "resource") return { kind: view.resource };
   if (view.kind === "custom") return { custom: view.target };
   return null;
+}
+
+/** The view that shows a target — the inverse of `watchOf`. */
+export function viewOf(target: WatchTarget): View {
+  return "kind" in target ? { kind: "resource", resource: target.kind } : { kind: "custom", target: target.custom };
 }

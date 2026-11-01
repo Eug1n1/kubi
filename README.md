@@ -28,8 +28,10 @@ end renders what it sends back. It runs on macOS, Windows and Linux.
 
 **Inspect**
 
-- A detail panel with facts, labels and annotations, and tabs for the object's
-  manifest, its data, its sources, its events and its metrics.
+- A detail panel with the object's conditions and their reasons, its owner
+  references as links that open the object that owns it, its labels and
+  annotations, and tabs for the object's manifest, its data, its sources, its
+  events and its metrics.
 - Containers: image, ports, live state with the waiting reason or exit code,
   restarts, requests and limits, environment grouped by where each value comes
   from, and the volumes each container mounts.

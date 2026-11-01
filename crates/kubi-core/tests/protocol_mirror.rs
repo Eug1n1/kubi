@@ -164,6 +164,13 @@ fn status_tone_tags_are_mirrored() {
     assert_mirrored("StatusTone");
 }
 
+/// A `DetailRow` is a one-key object like an `AppEvent`, so a row the engine
+/// renames stops rendering rather than failing loudly.
+#[test]
+fn detail_row_tags_are_mirrored() {
+    assert_mirrored("DetailRow");
+}
+
 #[test]
 fn watch_target_tags_are_mirrored() {
     assert_mirrored("WatchTarget");
@@ -177,6 +184,8 @@ fn the_parsers_find_the_protocol() {
     assert!(ts_tags(&source(TYPES), "Command").len() > 20);
     assert!(rust_variants(&source(MODEL), "AppEvent").len() > 20);
     assert!(ts_tags(&source(TYPES), "AppEvent").len() > 20);
+    assert_eq!(rust_variants(&source(MODEL), "DetailRow").len(), 5);
+    assert_eq!(ts_tags(&source(TYPES), "DetailRow").len(), 5);
 }
 
 #[test]
