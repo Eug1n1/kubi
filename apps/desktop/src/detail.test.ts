@@ -18,9 +18,9 @@ describe("orderSections", () => {
     expect(titles(ordered)).toEqual(["Object", "Status", "Labels", "Annotations"]);
   });
 
-  it("keeps a section it has never heard of after the ones it knows", () => {
+  it("keeps a kind's own section above the metadata lists", () => {
     const ordered = orderSections([section("Rules"), section("Labels"), section("Object")]);
-    expect(titles(ordered)).toEqual(["Object", "Labels", "Rules"]);
+    expect(titles(ordered)).toEqual(["Object", "Rules", "Labels"]);
   });
 
   it("keeps the arrival order of two sections it has never heard of", () => {
@@ -39,6 +39,10 @@ describe("startsFolded", () => {
   it("folds the metadata that runs long", () => {
     expect(startsFolded("Labels")).toBe(true);
     expect(startsFolded("Annotations")).toBe(true);
+  });
+
+  it("folds where a pod may land, which is a list of keys", () => {
+    expect(startsFolded("Scheduling")).toBe(true);
   });
 
   it("leaves everything else open", () => {
@@ -117,5 +121,31 @@ describe("sectionCount", () => {
       ],
     };
     expect(sectionCount(object)).toBe(2);
+  });
+
+  it("counts the chips of a selector", () => {
+    const selector: DetailSection = {
+      title: "Service",
+      rows: [{ badges: { label: "Selector", items: ["app=web", "tier=front"] } }],
+    };
+    expect(sectionCount(selector)).toBe(2);
+  });
+
+  it("counts the ports a service exposes", () => {
+    const ports: DetailSection = {
+      title: "Service",
+      rows: [
+        {
+          ports: {
+            label: "Ports",
+            ports: [
+              { label: "http: 80/TCP", port: 80, proto: "TCP" },
+              { label: "9090/UDP", port: 9090, proto: "UDP" },
+            ],
+          },
+        },
+      ],
+    };
+    expect(sectionCount(ports)).toBe(2);
   });
 });

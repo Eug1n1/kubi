@@ -20,6 +20,17 @@ shipped as.
   a pod opens the ReplicaSet that owns it, and a custom resource gets the same
   block as a built-in one.
 
+- The detail panel shows each kind's own sections, read from the object: a pod's
+  node, IPs, QoS, restart policy, images, the ServiceAccount it runs as, where it
+  may land (its node selector and tolerations) and the volumes it mounts; a
+  workload's rollout counts, strategy, selector and images; a Service's
+  reachability, its selector and its ports (a TCP port is still one click from a
+  forward); a Node's identity, addresses, capacity next to what it will actually
+  hand out, and taints; a Role's rules as a table; a binding's subjects with the
+  role it binds them to as a link; and a ServiceAccount's Secrets. Live CPU and
+  memory stay in a Usage block of their own, because the object does not carry
+  them.
+
 ### Fixed
 
 - The namespace menu gives every namespace one shared width, so a short name

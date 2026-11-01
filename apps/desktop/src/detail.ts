@@ -11,12 +11,19 @@ type SectionLayout = { order: number; folded?: boolean };
 const LAYOUT: Record<string, SectionLayout> = {
   Object: { order: 10 },
   Status: { order: 20 },
+  // Where a pod may land is a long list of keys; it is worth opening on purpose.
+  Scheduling: { order: 40, folded: true },
   Labels: { order: 90, folded: true },
   Annotations: { order: 91, folded: true },
 };
 
-/** A section this table has never heard of lands after every named one. */
-const UNKNOWN_ORDER = 100;
+/**
+ * A section this table has never heard of is a kind's own — the rows the engine
+ * reads out of one kind's spec — so it lands between the object's status and the
+ * metadata lists, and keeps its arrival order among its neighbours. A section
+ * that belongs somewhere else gets named above.
+ */
+const UNKNOWN_ORDER = 30;
 
 /**
  * The sections in the order the panel shows them. A section the layout does not
@@ -62,6 +69,8 @@ export function sectionCount(section: DetailSection): number {
   if (only == null) return section.rows.length;
   if ("table" in only) return only.table.rows.length;
   if ("list" in only) return only.list.items.length;
+  if ("badges" in only) return only.badges.items.length;
+  if ("ports" in only) return only.ports.ports.length;
   if ("links" in only) return only.links.links.length;
   if ("conditions" in only) return only.conditions.conditions.length;
   return section.rows.length;

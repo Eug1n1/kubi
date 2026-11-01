@@ -7,22 +7,27 @@ use std::time::Duration;
 use crate::metrics_types::{NodeMetrics, PodMetrics};
 use futures::SinkExt;
 use futures::{AsyncBufReadExt, StreamExt};
-use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
+use k8s_openapi::api::apps::v1::{
+    DaemonSet, Deployment, DeploymentStrategy, ReplicaSet, StatefulSet,
+};
 use k8s_openapi::api::autoscaling::v2::HorizontalPodAutoscaler;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
 use k8s_openapi::api::core::v1::{
     ConfigMap, Container, ContainerStatus, Endpoints, Event, KeyToPath, LimitRange, Namespace,
-    Node, PersistentVolume, PersistentVolumeClaim, Pod, ResourceQuota, Secret, Service,
-    ServiceAccount, Volume,
+    Node, PersistentVolume, PersistentVolumeClaim, Pod, PodSpec, ResourceQuota, Secret, Service,
+    ServiceAccount, ServiceSpec, Volume,
 };
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use k8s_openapi::api::networking::v1::{Ingress, IngressClass, NetworkPolicy};
 use k8s_openapi::api::policy::v1::PodDisruptionBudget;
-use k8s_openapi::api::rbac::v1::{ClusterRole, ClusterRoleBinding, Role, RoleBinding};
+use k8s_openapi::api::rbac::v1::{
+    ClusterRole, ClusterRoleBinding, PolicyRule, Role, RoleBinding, RoleRef, Subject,
+};
 use k8s_openapi::api::storage::v1::StorageClass;
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, Time};
+use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use kube::api::{
     ApiResource, DeleteParams, DynamicObject, ListParams, LogParams, ObjectList, Patch, PatchParams,
 };
@@ -39,9 +44,9 @@ use tokio_util::sync::CancellationToken;
 use crate::kubeconfig::{contexts_from, load_kubeconfig, namespace_of};
 use crate::model::{
     AppEvent, ArgoApp, ArgoAppSet, ArgoCluster, ArgoOverview, ArgoRepo, ClusterOverview, Command,
-    CrTarget, DataEntry, DetailCondition, DetailLink, DetailRow, DetailSection, EventInfo,
-    ObjectWarning, OverviewWarning, PodContainer, PodEnv, PodMount, PodValue, ResourceKind,
-    StatusTone, UsageSample, WatchTarget,
+    CrTarget, DataEntry, DetailCondition, DetailLink, DetailPort, DetailRow, DetailSection,
+    EventInfo, ObjectWarning, OverviewWarning, PodContainer, PodEnv, PodMount, PodValue,
+    ResourceKind, StatusTone, UsageSample, WatchTarget,
 };
 use crate::quantity::{parse_bytes, parse_cpu_millis};
 use crate::rows::{
@@ -81,6 +86,8 @@ macro_rules! watch_cluster {
     };
 }
 
+/// Kinds whose detail is entirely generic: nothing is added on top of the
+/// sections every object gets.
 macro_rules! yaml_ns {
     ($client:expr, $namespace:expr, $name:expr, $ty:ty, $version:expr, $kind:expr) => {
         read_yaml(
@@ -89,6 +96,23 @@ macro_rules! yaml_ns {
             $version,
             $kind,
             false,
+            |_: &$ty| Vec::new(),
+        )
+        .await
+    };
+}
+
+/// A kind that reads its own rows out of the typed object, so a field renamed in
+/// k8s-openapi stops compiling instead of quietly emptying the panel.
+macro_rules! yaml_ns_detail {
+    ($client:expr, $namespace:expr, $name:expr, $ty:ty, $version:expr, $kind:expr, $detail:path) => {
+        read_yaml(
+            ns_api::<$ty>($client, $namespace),
+            $name,
+            $version,
+            $kind,
+            false,
+            $detail,
         )
         .await
     };
@@ -96,7 +120,29 @@ macro_rules! yaml_ns {
 
 macro_rules! yaml_cluster {
     ($client:expr, $name:expr, $ty:ty, $version:expr, $kind:expr) => {
-        read_yaml(Api::<$ty>::all($client), $name, $version, $kind, false).await
+        read_yaml(
+            Api::<$ty>::all($client),
+            $name,
+            $version,
+            $kind,
+            false,
+            |_: &$ty| Vec::new(),
+        )
+        .await
+    };
+}
+
+macro_rules! yaml_cluster_detail {
+    ($client:expr, $name:expr, $ty:ty, $version:expr, $kind:expr, $detail:path) => {
+        read_yaml(
+            Api::<$ty>::all($client),
+            $name,
+            $version,
+            $kind,
+            false,
+            $detail,
+        )
+        .await
     };
 }
 use crate::yaml;
@@ -2029,35 +2075,60 @@ async fn yaml_for(
     namespace: &str,
     name: &str,
     reveal_secrets: bool,
-) -> Result<(String, serde_json::Value), String> {
+) -> Result<(String, serde_json::Value, Vec<DetailSection>), String> {
     match kind {
         ResourceKind::Pods => {
-            yaml_ns!(client, namespace, name, Pod, "v1", "Pod")
+            yaml_ns_detail!(client, namespace, name, Pod, "v1", "Pod", pod_sections)
         }
-        ResourceKind::Deployments => {
-            yaml_ns!(client, namespace, name, Deployment, "apps/v1", "Deployment")
-        }
-        ResourceKind::ReplicaSets => {
-            yaml_ns!(client, namespace, name, ReplicaSet, "apps/v1", "ReplicaSet")
-        }
-        ResourceKind::StatefulSets => {
-            yaml_ns!(
-                client,
-                namespace,
-                name,
-                StatefulSet,
-                "apps/v1",
-                "StatefulSet"
-            )
-        }
-        ResourceKind::DaemonSets => {
-            yaml_ns!(client, namespace, name, DaemonSet, "apps/v1", "DaemonSet")
-        }
+        ResourceKind::Deployments => yaml_ns_detail!(
+            client,
+            namespace,
+            name,
+            Deployment,
+            "apps/v1",
+            "Deployment",
+            deployment_sections
+        ),
+        ResourceKind::ReplicaSets => yaml_ns_detail!(
+            client,
+            namespace,
+            name,
+            ReplicaSet,
+            "apps/v1",
+            "ReplicaSet",
+            replica_set_sections
+        ),
+        ResourceKind::StatefulSets => yaml_ns_detail!(
+            client,
+            namespace,
+            name,
+            StatefulSet,
+            "apps/v1",
+            "StatefulSet",
+            stateful_set_sections
+        ),
+        ResourceKind::DaemonSets => yaml_ns_detail!(
+            client,
+            namespace,
+            name,
+            DaemonSet,
+            "apps/v1",
+            "DaemonSet",
+            daemon_set_sections
+        ),
         ResourceKind::Jobs => yaml_ns!(client, namespace, name, Job, "batch/v1", "Job"),
         ResourceKind::CronJobs => {
             yaml_ns!(client, namespace, name, CronJob, "batch/v1", "CronJob")
         }
-        ResourceKind::Services => yaml_ns!(client, namespace, name, Service, "v1", "Service"),
+        ResourceKind::Services => yaml_ns_detail!(
+            client,
+            namespace,
+            name,
+            Service,
+            "v1",
+            "Service",
+            service_sections
+        ),
         ResourceKind::Endpoints => {
             yaml_ns!(client, namespace, name, Endpoints, "v1", "Endpoints")
         }
@@ -2095,6 +2166,7 @@ async fn yaml_for(
                 "v1",
                 "Secret",
                 !reveal_secrets,
+                |_: &Secret| Vec::new(),
             )
             .await
         }
@@ -2137,32 +2209,37 @@ async fn yaml_for(
             "PersistentVolumeClaim"
         ),
         ResourceKind::ServiceAccounts => {
-            yaml_ns!(
+            yaml_ns_detail!(
                 client,
                 namespace,
                 name,
                 ServiceAccount,
                 "v1",
-                "ServiceAccount"
+                "ServiceAccount",
+                service_account_sections
             )
         }
-        ResourceKind::Roles => yaml_ns!(
+        ResourceKind::Roles => yaml_ns_detail!(
             client,
             namespace,
             name,
             Role,
             "rbac.authorization.k8s.io/v1",
-            "Role"
+            "Role",
+            role_sections
         ),
-        ResourceKind::RoleBindings => yaml_ns!(
+        ResourceKind::RoleBindings => yaml_ns_detail!(
             client,
             namespace,
             name,
             RoleBinding,
             "rbac.authorization.k8s.io/v1",
-            "RoleBinding"
+            "RoleBinding",
+            role_binding_sections
         ),
-        ResourceKind::Nodes => yaml_cluster!(client, name, Node, "v1", "Node"),
+        ResourceKind::Nodes => {
+            yaml_cluster_detail!(client, name, Node, "v1", "Node", node_sections)
+        }
         ResourceKind::Namespaces => yaml_cluster!(client, name, Namespace, "v1", "Namespace"),
         ResourceKind::IngressClasses => yaml_cluster!(
             client,
@@ -2181,19 +2258,21 @@ async fn yaml_for(
             "storage.k8s.io/v1",
             "StorageClass"
         ),
-        ResourceKind::ClusterRoles => yaml_cluster!(
+        ResourceKind::ClusterRoles => yaml_cluster_detail!(
             client,
             name,
             ClusterRole,
             "rbac.authorization.k8s.io/v1",
-            "ClusterRole"
+            "ClusterRole",
+            cluster_role_sections
         ),
-        ResourceKind::ClusterRoleBindings => yaml_cluster!(
+        ResourceKind::ClusterRoleBindings => yaml_cluster_detail!(
             client,
             name,
             ClusterRoleBinding,
             "rbac.authorization.k8s.io/v1",
-            "ClusterRoleBinding"
+            "ClusterRoleBinding",
+            cluster_role_binding_sections
         ),
         ResourceKind::CustomResourceDefinitions => yaml_cluster!(
             client,
@@ -2264,13 +2343,21 @@ async fn yaml_dynamic(
     namespaced: bool,
     namespace: &str,
     name: &str,
-) -> Result<(String, serde_json::Value), String> {
+) -> Result<(String, serde_json::Value, Vec<DetailSection>), String> {
     let api = if namespaced && !namespace.is_empty() {
         Api::<DynamicObject>::namespaced_with(client, namespace, resource)
     } else {
         Api::<DynamicObject>::all_with(client, resource)
     };
-    read_yaml(api, name, &resource.api_version, &resource.kind, false).await
+    read_yaml(
+        api,
+        name,
+        &resource.api_version,
+        &resource.kind,
+        false,
+        |_: &DynamicObject| Vec::new(),
+    )
+    .await
 }
 
 const BUILTIN_GROUPS: &[&str] = &[
@@ -2384,22 +2471,27 @@ where
     }
 }
 
-/// The object's YAML and the object itself: the panel needs both, and reading it
-/// twice would be two round trips to the API server.
-async fn read_yaml<K>(
+/// The object's YAML, the object itself, and the sections its own kind adds: the
+/// panel needs all three, and reading the object twice would be two round trips
+/// to the API server. `detail` is handed the typed object so a kind can read
+/// fields the compiler checks.
+async fn read_yaml<K, F>(
     api: Api<K>,
     name: &str,
     api_version: &str,
     kind: &str,
     mask_secret: bool,
-) -> Result<(String, serde_json::Value), String>
+    detail: F,
+) -> Result<(String, serde_json::Value, Vec<DetailSection>), String>
 where
     K: Resource + Clone + DeserializeOwned + Serialize + std::fmt::Debug + Send + Sync,
+    F: FnOnce(&K) -> Vec<DetailSection> + Send,
 {
     let object = api.get(name).await.map_err(|err| err.to_string())?;
+    let sections = detail(&object);
     let value = serde_json::to_value(&object).map_err(|err| err.to_string())?;
     let yaml = yaml::object_to_yaml(value.clone(), api_version, kind, mask_secret)?;
-    Ok((yaml, value))
+    Ok((yaml, value, sections))
 }
 
 async fn build_client(path: Option<&Path>, context: &str) -> Result<Client, String> {
@@ -3972,36 +4064,41 @@ async fn load_detail(
     events: std::sync::mpsc::Sender<AppEvent>,
 ) {
     let loaded = match &target {
-        WatchTarget::Kind(ResourceKind::ConfigMaps) => {
-            load_configmap(client, &namespace, &name).await
-        }
+        WatchTarget::Kind(ResourceKind::ConfigMaps) => load_configmap(client, &namespace, &name)
+            .await
+            .map(|(yaml, value, entries)| (yaml, value, Vec::new(), entries)),
         WatchTarget::Kind(ResourceKind::Secrets) => {
-            load_secret(client, &namespace, &name, reveal_secrets).await
+            load_secret(client, &namespace, &name, reveal_secrets)
+                .await
+                .map(|(yaml, value, entries)| (yaml, value, Vec::new(), entries))
         }
         WatchTarget::Kind(kind) => yaml_for(client, *kind, &namespace, &name, reveal_secrets)
             .await
-            .map(|(yaml, value)| (yaml, value, None)),
+            .map(|(yaml, value, sections)| (yaml, value, sections, None)),
         WatchTarget::Custom(target) => {
             let resource =
                 resource_of(&target.group, &target.version, &target.kind, &target.plural);
             yaml_dynamic(client, &resource, target.namespaced, &namespace, &name)
                 .await
-                .map(|(yaml, value)| (yaml, value, None))
+                .map(|(yaml, value, sections)| (yaml, value, sections, None))
         }
     };
     match loaded {
-        Ok((yaml, value, entries)) => {
+        Ok((yaml, value, kind_sections, entries)) => {
             let _ = events.send(AppEvent::Yaml {
                 context: context.clone(),
                 uid: uid.clone(),
                 yaml,
             });
-            // The Overview sections come from the read that just happened, so a
+            // The generic sections are read off the object and the kind's own off
+            // the typed struct, both from the read that just happened, so a
             // selection costs one request to the API server rather than two.
+            let mut sections = object_sections(&value, now_secs());
+            sections.extend(kind_sections);
             let _ = events.send(AppEvent::ObjectDetail {
                 context: context.clone(),
                 uid: uid.clone(),
-                sections: object_sections(&value, now_secs()),
+                sections,
             });
             if let Some(entries) = entries {
                 let _ = events.send(AppEvent::ObjectData {
@@ -4211,6 +4308,781 @@ fn pairs_at(value: &serde_json::Value, path: &[&str]) -> Option<Vec<Vec<String>>
 
 fn at<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<&'a serde_json::Value> {
     path.iter().try_fold(value, |at, key| at.get(*key))
+}
+/// The row helpers below all drop a row that has nothing in it: an empty block
+/// reads as "not loaded" rather than as "none".
+fn text_row(label: &str, value: String) -> Option<DetailRow> {
+    (!value.is_empty()).then(|| DetailRow::Text {
+        label: label.into(),
+        value,
+    })
+}
+
+fn badges_row(label: &str, items: Vec<String>) -> Option<DetailRow> {
+    (!items.is_empty()).then(|| DetailRow::Badges {
+        label: label.into(),
+        items,
+    })
+}
+
+fn links_row(label: &str, links: Vec<DetailLink>) -> Option<DetailRow> {
+    (!links.is_empty()).then(|| DetailRow::Links {
+        label: label.into(),
+        links,
+    })
+}
+
+fn table_row(label: &str, columns: &[&str], rows: Vec<Vec<String>>) -> Option<DetailRow> {
+    (!rows.is_empty()).then(|| DetailRow::Table {
+        label: label.into(),
+        columns: columns.iter().map(|column| (*column).to_string()).collect(),
+        rows,
+    })
+}
+
+/// A section, dropped when every row in it was dropped.
+fn section(title: &str, rows: Vec<Option<DetailRow>>) -> Option<DetailSection> {
+    let rows: Vec<DetailRow> = rows.into_iter().flatten().collect();
+    (!rows.is_empty()).then(|| DetailSection {
+        title: title.into(),
+        rows,
+    })
+}
+
+/// A label selector as `key=value` chips, in the order a `BTreeMap` gives, so two
+/// reads of one object agree.
+fn selector_badges(selector: &BTreeMap<String, String>) -> Vec<String> {
+    selector
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect()
+}
+
+/// A list as one cell. RBAC spells "everything" as an empty list, so that is what
+/// it says here too.
+fn joined(items: &[String]) -> String {
+    if items.is_empty() {
+        "*".to_string()
+    } else {
+        items.join(", ")
+    }
+}
+
+/// How a Service is reached, what it selects, and the ports the panel can offer
+/// to forward. The numbers travel with the labels because only the front end
+/// knows whether a forward is possible for this cluster.
+fn service_sections(service: &Service) -> Vec<DetailSection> {
+    let spec = service.spec.as_ref();
+    let rows = vec![
+        text_row(
+            "Type",
+            spec.and_then(|spec| spec.type_.clone()).unwrap_or_default(),
+        ),
+        text_row(
+            "Cluster IP",
+            spec.and_then(|spec| spec.cluster_ip.clone())
+                .unwrap_or_default(),
+        ),
+        badges_row(
+            "Cluster IPs",
+            spec.and_then(|spec| spec.cluster_ips.clone())
+                .unwrap_or_default(),
+        ),
+        badges_row(
+            "External IPs",
+            spec.and_then(|spec| spec.external_ips.clone())
+                .unwrap_or_default(),
+        ),
+        badges_row("Load balancer", load_balancer_addresses(service)),
+        badges_row(
+            "Selector",
+            spec.and_then(|spec| spec.selector.as_ref())
+                .map(selector_badges)
+                .unwrap_or_default(),
+        ),
+        ports_row(spec),
+    ];
+    section("Service", rows).into_iter().collect()
+}
+
+/// Where a LoadBalancer Service answers. One still being provisioned has no
+/// address yet, and saying `Pending` beats an empty row that reads as "not
+/// loaded" — which is what the object list says for the same service.
+fn load_balancer_addresses(service: &Service) -> Vec<String> {
+    let addresses: Vec<String> = service
+        .status
+        .as_ref()
+        .and_then(|status| status.load_balancer.as_ref())
+        .and_then(|balancer| balancer.ingress.as_ref())
+        .map(|ingress| {
+            ingress
+                .iter()
+                .filter_map(|entry| entry.ip.clone().or_else(|| entry.hostname.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let is_load_balancer =
+        service.spec.as_ref().and_then(|spec| spec.type_.as_deref()) == Some("LoadBalancer");
+    if addresses.is_empty() && is_load_balancer {
+        return vec!["Pending".to_string()];
+    }
+    addresses
+}
+
+/// The Service's ports, skipping any the API server reported out of range.
+fn ports_row(spec: Option<&ServiceSpec>) -> Option<DetailRow> {
+    let ports: Vec<DetailPort> = spec
+        .and_then(|spec| spec.ports.as_ref())?
+        .iter()
+        .filter_map(|port| {
+            let number = u16::try_from(port.port).ok()?;
+            let proto = port.protocol.clone().unwrap_or_else(|| "TCP".to_string());
+            let label = match &port.name {
+                Some(name) if !name.is_empty() => format!("{name}: {number}/{proto}"),
+                _ => format!("{number}/{proto}"),
+            };
+            Some(DetailPort {
+                label,
+                port: number,
+                proto: proto.to_uppercase(),
+            })
+        })
+        .collect();
+    (!ports.is_empty()).then(|| DetailRow::Ports {
+        label: "Ports".into(),
+        ports,
+    })
+}
+
+/// What a Node is and what it can hold. Its live usage is not on the object —
+/// that comes from the metrics API — so the panel keeps that in a block of its
+/// own rather than here.
+fn node_sections(node: &Node) -> Vec<DetailSection> {
+    let status = node.status.as_ref();
+    let info = status.and_then(|status| status.node_info.as_ref());
+    let identity = section(
+        "Node",
+        vec![
+            badges_row("Roles", node_roles(node)),
+            text_row(
+                "Kubelet",
+                info.map(|info| info.kubelet_version.clone())
+                    .unwrap_or_default(),
+            ),
+            text_row(
+                "OS",
+                info.map(|info| info.os_image.clone()).unwrap_or_default(),
+            ),
+            text_row(
+                "Runtime",
+                info.map(|info| info.container_runtime_version.clone())
+                    .unwrap_or_default(),
+            ),
+            text_row(
+                "Kernel",
+                info.map(|info| info.kernel_version.clone())
+                    .unwrap_or_default(),
+            ),
+            text_row(
+                "Architecture",
+                info.map(|info| info.architecture.clone())
+                    .unwrap_or_default(),
+            ),
+        ],
+    );
+
+    let addresses = section(
+        "Addresses",
+        vec![table_row(
+            "Addresses",
+            &["Type", "Address"],
+            status
+                .and_then(|status| status.addresses.as_ref())
+                .map(|addresses| {
+                    addresses
+                        .iter()
+                        .map(|address| vec![address.type_.clone(), address.address.clone()])
+                        .collect()
+                })
+                .unwrap_or_default(),
+        )],
+    );
+
+    let capacity = section(
+        "Capacity",
+        vec![table_row(
+            "Capacity",
+            &["Resource", "Capacity", "Allocatable"],
+            capacity_rows(node),
+        )],
+    );
+
+    let taints = section(
+        "Taints",
+        vec![table_row(
+            "Taints",
+            &["Key", "Value", "Effect"],
+            node.spec
+                .as_ref()
+                .and_then(|spec| spec.taints.as_ref())
+                .map(|taints| {
+                    taints
+                        .iter()
+                        .map(|taint| {
+                            vec![
+                                taint.key.clone(),
+                                taint.value.clone().unwrap_or_default(),
+                                taint.effect.clone(),
+                            ]
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        )],
+    );
+
+    [identity, addresses, capacity, taints]
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// The roles a Node carries, read off its `node-role.kubernetes.io/*` labels.
+fn node_roles(node: &Node) -> Vec<String> {
+    const PREFIX: &str = "node-role.kubernetes.io/";
+    node.metadata
+        .labels
+        .as_ref()
+        .map(|labels| {
+            labels
+                .keys()
+                .filter_map(|key| key.strip_prefix(PREFIX))
+                .filter(|role| !role.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// What the node reports it can hold next to what it will actually hand out.
+fn capacity_rows(node: &Node) -> Vec<Vec<String>> {
+    let status = node.status.as_ref();
+    let capacity = status.and_then(|status| status.capacity.as_ref());
+    let allocatable = status.and_then(|status| status.allocatable.as_ref());
+    let mut resources: Vec<&String> = capacity.into_iter().flat_map(BTreeMap::keys).collect();
+    resources.sort();
+    resources
+        .into_iter()
+        .map(|resource| {
+            vec![
+                resource.clone(),
+                quantity_text(capacity.and_then(|map| map.get(resource))),
+                quantity_text(allocatable.and_then(|map| map.get(resource))),
+            ]
+        })
+        .collect()
+}
+
+/// A quantity as the API server wrote it — `4`, `128Gi` — which is how the
+/// cluster's own numbers read.
+fn quantity_text(quantity: Option<&Quantity>) -> String {
+    quantity
+        .map(|quantity| quantity.0.clone())
+        .unwrap_or_default()
+}
+
+/// What a Role allows, one row per rule. The object list can only say how many
+/// rules there are.
+fn role_sections(role: &Role) -> Vec<DetailSection> {
+    rules_section(role.rules.as_deref().unwrap_or_default())
+}
+
+fn cluster_role_sections(role: &ClusterRole) -> Vec<DetailSection> {
+    rules_section(role.rules.as_deref().unwrap_or_default())
+}
+
+fn rules_section(rules: &[PolicyRule]) -> Vec<DetailSection> {
+    let rows: Vec<Vec<String>> = rules
+        .iter()
+        .map(|rule| {
+            let resources = match (&rule.resources, &rule.non_resource_urls) {
+                (Some(resources), _) => joined(resources),
+                (None, Some(urls)) => urls.join(", "),
+                (None, None) => "*".to_string(),
+            };
+            vec![
+                resources,
+                joined(&rule.verbs),
+                joined(rule.api_groups.as_deref().unwrap_or_default()),
+                joined(rule.resource_names.as_deref().unwrap_or_default()),
+            ]
+        })
+        .collect();
+    section(
+        "Rules",
+        vec![table_row(
+            "Rules",
+            &["Resources", "Verbs", "API groups", "Resource names"],
+            rows,
+        )],
+    )
+    .into_iter()
+    .collect()
+}
+
+/// Who a binding binds, and the role it binds them to.
+fn role_binding_sections(binding: &RoleBinding) -> Vec<DetailSection> {
+    access_section(
+        binding.metadata.namespace.as_deref(),
+        binding.subjects.as_deref().unwrap_or_default(),
+        &binding.role_ref,
+    )
+}
+
+fn cluster_role_binding_sections(binding: &ClusterRoleBinding) -> Vec<DetailSection> {
+    access_section(
+        None,
+        binding.subjects.as_deref().unwrap_or_default(),
+        &binding.role_ref,
+    )
+}
+
+fn access_section(
+    namespace: Option<&str>,
+    subjects: &[Subject],
+    role_ref: &RoleRef,
+) -> Vec<DetailSection> {
+    let rows: Vec<Vec<String>> = subjects
+        .iter()
+        .map(|subject| {
+            vec![
+                subject.kind.clone(),
+                subject.name.clone(),
+                subject.namespace.clone().unwrap_or_else(|| "-".to_string()),
+            ]
+        })
+        .collect();
+    // A Role lives in the binding's namespace; a ClusterRole lives in none.
+    let (target, namespace) = match role_ref.kind.as_str() {
+        "Role" => (
+            Some(WatchTarget::Kind(ResourceKind::Roles)),
+            namespace.unwrap_or_default().to_string(),
+        ),
+        "ClusterRole" => (
+            Some(WatchTarget::Kind(ResourceKind::ClusterRoles)),
+            String::new(),
+        ),
+        _ => (None, String::new()),
+    };
+    let role = links_row(
+        "Role",
+        vec![DetailLink {
+            label: format!("{} {}", role_ref.kind, role_ref.name),
+            namespace,
+            name: role_ref.name.clone(),
+            target,
+        }],
+    );
+    section(
+        "Access",
+        vec![
+            table_row("Subjects", &["Kind", "Name", "Namespace"], rows),
+            role,
+        ],
+    )
+    .into_iter()
+    .collect()
+}
+
+/// The Secrets a ServiceAccount hands to the pods that use it, as links.
+fn service_account_sections(account: &ServiceAccount) -> Vec<DetailSection> {
+    let namespace = account.metadata.namespace.clone().unwrap_or_default();
+    let secret_links = |label: &str, names: Vec<String>| -> Option<DetailRow> {
+        let links: Vec<DetailLink> = names
+            .into_iter()
+            .map(|name| DetailLink {
+                label: name.clone(),
+                namespace: namespace.clone(),
+                name,
+                target: Some(WatchTarget::Kind(ResourceKind::Secrets)),
+            })
+            .collect();
+        links_row(label, links)
+    };
+    let secrets = account
+        .secrets
+        .iter()
+        .flatten()
+        .filter_map(|reference| reference.name.clone())
+        .collect();
+    let pull_secrets = account
+        .image_pull_secrets
+        .iter()
+        .flatten()
+        .map(|reference| reference.name.clone())
+        .collect();
+    section(
+        "References",
+        vec![
+            secret_links("Secrets", secrets),
+            secret_links("Pull secrets", pull_secrets),
+        ],
+    )
+    .into_iter()
+    .collect()
+}
+/// A list of short strings as a row, dropped when it is empty.
+fn list_row(label: &str, items: Vec<String>) -> Option<DetailRow> {
+    (!items.is_empty()).then(|| DetailRow::List {
+        label: label.into(),
+        items,
+    })
+}
+
+/// A replica count the API server reported.
+fn count(value: Option<i32>) -> String {
+    value.map(|value| value.to_string()).unwrap_or_default()
+}
+
+/// The images a pod template runs, in spec order.
+fn pod_images(spec: Option<&PodSpec>) -> Vec<String> {
+    spec.map(|spec| {
+        spec.containers
+            .iter()
+            .filter_map(|container| container.image.clone())
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// A workload's pod selector as tags.
+fn selector_labels(selector: Option<&LabelSelector>) -> Vec<String> {
+    selector
+        .and_then(|selector| selector.match_labels.as_ref())
+        .map(selector_badges)
+        .unwrap_or_default()
+}
+
+/// How many times the pod's containers have restarted between them.
+fn pod_restarts(pod: &Pod) -> String {
+    pod.status
+        .as_ref()
+        .and_then(|status| status.container_statuses.as_ref())
+        .map(|statuses| {
+            statuses
+                .iter()
+                .map(|status| status.restart_count)
+                .sum::<i32>()
+                .to_string()
+        })
+        .unwrap_or_else(|| "0".to_string())
+}
+
+/// What a pod is and where it runs. Its live usage is not on the object, so the
+/// panel reads that off the row into a block of its own instead.
+fn pod_sections(pod: &Pod) -> Vec<DetailSection> {
+    let spec = pod.spec.as_ref();
+    let status = pod.status.as_ref();
+    let namespace = pod.metadata.namespace.clone().unwrap_or_default();
+    let pod_rows = vec![
+        text_row(
+            "Node",
+            spec.and_then(|spec| spec.node_name.clone())
+                .unwrap_or_default(),
+        ),
+        text_row(
+            "Pod IP",
+            status
+                .and_then(|status| status.pod_ip.clone())
+                .unwrap_or_default(),
+        ),
+        badges_row(
+            "Pod IPs",
+            status
+                .and_then(|status| status.pod_ips.as_ref())
+                .map(|ips| ips.iter().map(|ip| ip.ip.clone()).collect())
+                .unwrap_or_default(),
+        ),
+        text_row(
+            "QoS",
+            status
+                .and_then(|status| status.qos_class.clone())
+                .unwrap_or_default(),
+        ),
+        text_row(
+            "Priority class",
+            spec.and_then(|spec| spec.priority_class_name.clone())
+                .unwrap_or_default(),
+        ),
+        text_row(
+            "Runtime class",
+            spec.and_then(|spec| spec.runtime_class_name.clone())
+                .unwrap_or_default(),
+        ),
+        text_row(
+            "Restart policy",
+            spec.and_then(|spec| spec.restart_policy.clone())
+                .unwrap_or_default(),
+        ),
+        text_row("Restarts", pod_restarts(pod)),
+        links_row(
+            "Service account",
+            spec.and_then(|spec| spec.service_account_name.clone())
+                .map(|name| DetailLink {
+                    label: name.clone(),
+                    namespace,
+                    name,
+                    target: Some(WatchTarget::Kind(ResourceKind::ServiceAccounts)),
+                })
+                .into_iter()
+                .collect(),
+        ),
+        list_row("Images", pod_images(spec)),
+    ];
+
+    let scheduling = section(
+        "Scheduling",
+        vec![
+            badges_row(
+                "Node selector",
+                spec.and_then(|spec| spec.node_selector.as_ref())
+                    .map(selector_badges)
+                    .unwrap_or_default(),
+            ),
+            list_row("Tolerations", toleration_list(spec)),
+        ],
+    );
+
+    let volumes = section(
+        "Volumes",
+        vec![table_row(
+            "Volumes",
+            &["Name", "Type", "Source"],
+            volume_rows(spec),
+        )],
+    );
+
+    [section("Pod", pod_rows), scheduling, volumes]
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// A pod's tolerations, one line each.
+fn toleration_list(spec: Option<&PodSpec>) -> Vec<String> {
+    spec.and_then(|spec| spec.tolerations.as_ref())
+        .map(|tolerations| {
+            tolerations
+                .iter()
+                .map(|toleration| {
+                    let key = match toleration.key.as_deref() {
+                        Some(key) if !key.is_empty() => key.to_string(),
+                        _ => "*".to_string(),
+                    };
+                    let effect = toleration.effect.clone().unwrap_or_default();
+                    let value = toleration.value.clone().unwrap_or_default();
+                    if toleration.operator.as_deref() == Some("Exists") || value.is_empty() {
+                        format!("{key} Exists: {effect}")
+                    } else {
+                        format!("{key}={value}: {effect}")
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A pod's volumes: what each one is called and where it comes from. The variant
+/// that is set is the kind, so the table can say which one it found.
+fn volume_rows(spec: Option<&PodSpec>) -> Vec<Vec<String>> {
+    spec.and_then(|spec| spec.volumes.as_ref())
+        .map(|volumes| volumes.iter().map(volume_row).collect())
+        .unwrap_or_default()
+}
+
+fn volume_row(volume: &Volume) -> Vec<String> {
+    let (kind, source) = if let Some(config_map) = &volume.config_map {
+        ("ConfigMap".to_string(), config_map.name.clone())
+    } else if let Some(secret) = &volume.secret {
+        (
+            "Secret".to_string(),
+            secret.secret_name.clone().unwrap_or_default(),
+        )
+    } else if let Some(claim) = &volume.persistent_volume_claim {
+        (
+            "PersistentVolumeClaim".to_string(),
+            claim.claim_name.clone(),
+        )
+    } else if let Some(host) = &volume.host_path {
+        ("HostPath".to_string(), host.path.clone())
+    } else if volume.empty_dir.is_some() {
+        ("EmptyDir".to_string(), String::new())
+    } else if volume.projected.is_some() {
+        ("Projected".to_string(), String::new())
+    } else if volume.downward_api.is_some() {
+        ("DownwardAPI".to_string(), String::new())
+    } else {
+        ("-".to_string(), String::new())
+    };
+    vec![volume.name.clone(), kind, source]
+}
+
+/// What a Deployment has rolled out and how it rolls the next one out.
+fn deployment_sections(deployment: &Deployment) -> Vec<DetailSection> {
+    let spec = deployment.spec.as_ref();
+    let status = deployment.status.as_ref();
+    section(
+        "Deployment",
+        vec![
+            text_row(
+                "Updated",
+                count(status.and_then(|status| status.updated_replicas)),
+            ),
+            text_row(
+                "Available",
+                count(status.and_then(|status| status.available_replicas)),
+            ),
+            text_row(
+                "Unavailable",
+                count(status.and_then(|status| status.unavailable_replicas)),
+            ),
+            text_row(
+                "Strategy",
+                spec.and_then(|spec| spec.strategy.as_ref())
+                    .map(strategy_text)
+                    .unwrap_or_default(),
+            ),
+            badges_row("Selector", selector_labels(spec.map(|spec| &spec.selector))),
+            list_row(
+                "Images",
+                pod_images(spec.and_then(|spec| spec.template.spec.as_ref())),
+            ),
+        ],
+    )
+    .into_iter()
+    .collect()
+}
+
+/// A rolling-update strategy as one line: `RollingUpdate 25% / 25%`.
+fn strategy_text(strategy: &DeploymentStrategy) -> String {
+    let kind = strategy.type_.clone().unwrap_or_default();
+    let Some(rolling) = &strategy.rolling_update else {
+        return kind;
+    };
+    let max_surge = rolling
+        .max_surge
+        .as_ref()
+        .map(int_or_percent)
+        .unwrap_or_default();
+    let max_unavailable = rolling
+        .max_unavailable
+        .as_ref()
+        .map(int_or_percent)
+        .unwrap_or_default();
+    format!("{kind} {max_surge} / {max_unavailable}")
+}
+
+fn int_or_percent(value: &IntOrString) -> String {
+    match value {
+        IntOrString::Int(number) => number.to_string(),
+        IntOrString::String(text) => text.clone(),
+    }
+}
+
+/// What a ReplicaSet holds, and the images it runs.
+fn replica_set_sections(replica_set: &ReplicaSet) -> Vec<DetailSection> {
+    let spec = replica_set.spec.as_ref();
+    let status = replica_set.status.as_ref();
+    section(
+        "ReplicaSet",
+        vec![
+            text_row("Replicas", count(status.map(|status| status.replicas))),
+            text_row(
+                "Ready",
+                count(status.and_then(|status| status.ready_replicas)),
+            ),
+            badges_row("Selector", selector_labels(spec.map(|spec| &spec.selector))),
+            list_row(
+                "Images",
+                pod_images(
+                    spec.and_then(|spec| spec.template.as_ref())
+                        .and_then(|template| template.spec.as_ref()),
+                ),
+            ),
+        ],
+    )
+    .into_iter()
+    .collect()
+}
+
+/// What a StatefulSet holds, and how it brings its pods up.
+fn stateful_set_sections(stateful_set: &StatefulSet) -> Vec<DetailSection> {
+    let spec = stateful_set.spec.as_ref();
+    let status = stateful_set.status.as_ref();
+    section(
+        "StatefulSet",
+        vec![
+            text_row(
+                "Current",
+                count(status.and_then(|status| status.current_replicas)),
+            ),
+            text_row(
+                "Updated",
+                count(status.and_then(|status| status.updated_replicas)),
+            ),
+            text_row(
+                "Service",
+                spec.and_then(|spec| spec.service_name.clone())
+                    .unwrap_or_default(),
+            ),
+            text_row(
+                "Pod management",
+                spec.and_then(|spec| spec.pod_management_policy.clone())
+                    .unwrap_or_default(),
+            ),
+            badges_row("Selector", selector_labels(spec.map(|spec| &spec.selector))),
+            list_row(
+                "Images",
+                pod_images(spec.and_then(|spec| spec.template.spec.as_ref())),
+            ),
+        ],
+    )
+    .into_iter()
+    .collect()
+}
+
+/// What a DaemonSet has placed, and the images it runs.
+fn daemon_set_sections(daemon_set: &DaemonSet) -> Vec<DetailSection> {
+    let spec = daemon_set.spec.as_ref();
+    let status = daemon_set.status.as_ref();
+    section(
+        "DaemonSet",
+        vec![
+            text_row(
+                "Current",
+                count(status.map(|status| status.current_number_scheduled)),
+            ),
+            text_row(
+                "Updated",
+                count(status.and_then(|status| status.updated_number_scheduled)),
+            ),
+            text_row(
+                "Available",
+                count(status.and_then(|status| status.number_available)),
+            ),
+            text_row(
+                "Misscheduled",
+                count(status.map(|status| status.number_misscheduled)),
+            ),
+            badges_row("Selector", selector_labels(spec.map(|spec| &spec.selector))),
+            list_row(
+                "Images",
+                pod_images(spec.and_then(|spec| spec.template.spec.as_ref())),
+            ),
+        ],
+    )
+    .into_iter()
+    .collect()
 }
 
 async fn load_configmap(
@@ -5579,7 +6451,9 @@ mod detail_tests {
         section.rows.iter().find(|row| match row {
             DetailRow::Text { label: l, .. }
             | DetailRow::List { label: l, .. }
+            | DetailRow::Badges { label: l, .. }
             | DetailRow::Table { label: l, .. }
+            | DetailRow::Ports { label: l, .. }
             | DetailRow::Links { label: l, .. }
             | DetailRow::Conditions { label: l, .. } => l == label,
         })
@@ -5775,5 +6649,314 @@ mod detail_tests {
         let object = section(&sections, "Object").expect("an Object section");
         assert!(row(object, "Owner references").is_none());
         assert!(row(object, "Finalizers").is_none());
+    }
+
+    /// A Service says how it is reached, and its ports carry the number the panel
+    /// needs to offer a forward.
+    #[test]
+    fn reads_a_service_into_reachability_and_a_port_list() {
+        let service: Service = serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": { "name": "web", "namespace": "team-a" },
+            "spec": {
+                "type": "LoadBalancer",
+                "clusterIP": "10.0.0.1",
+                "externalIPs": ["1.2.3.4"],
+                "selector": { "tier": "front", "app": "web" },
+                "ports": [
+                    { "name": "http", "port": 80, "targetPort": 8080, "protocol": "TCP" },
+                    { "port": 9090, "protocol": "UDP" }
+                ]
+            },
+            "status": { "loadBalancer": { "ingress": [{ "ip": "5.6.7.8" }] } }
+        }))
+        .expect("a Service");
+
+        let sections = service_sections(&service);
+        assert_eq!(titles(&sections), ["Service"]);
+        let service = section(&sections, "Service").expect("a Service section");
+        assert_eq!(
+            serde_json::to_value(row(service, "Selector").expect("a selector")).unwrap(),
+            json!({ "badges": { "label": "Selector", "items": ["app=web", "tier=front"] } })
+        );
+        assert_eq!(
+            serde_json::to_value(row(service, "Load balancer").expect("an address")).unwrap(),
+            json!({ "badges": { "label": "Load balancer", "items": ["5.6.7.8"] } })
+        );
+        assert_eq!(
+            serde_json::to_value(row(service, "Ports").expect("ports")).unwrap(),
+            json!({ "ports": { "label": "Ports", "ports": [
+                { "label": "http: 80/TCP", "port": 80, "proto": "TCP" },
+                { "label": "9090/UDP", "port": 9090, "proto": "UDP" }
+            ] } })
+        );
+    }
+
+    /// A LoadBalancer still being provisioned has no address, and the panel says
+    /// so rather than leaving the row out.
+    #[test]
+    fn calls_a_load_balancer_without_an_address_pending() {
+        let service: Service = serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": { "name": "web", "namespace": "team-a" },
+            "spec": { "type": "LoadBalancer", "ports": [{ "port": 80 }] }
+        }))
+        .expect("a Service");
+
+        let sections = service_sections(&service);
+        let service = section(&sections, "Service").expect("a Service section");
+        assert_eq!(
+            serde_json::to_value(row(service, "Load balancer").expect("an address")).unwrap(),
+            json!({ "badges": { "label": "Load balancer", "items": ["Pending"] } })
+        );
+    }
+
+    #[test]
+    fn reads_a_node_into_identity_capacity_and_taints() {
+        let node: Node = serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": "Node",
+            "metadata": {
+                "name": "node-a",
+                "labels": {
+                    "node-role.kubernetes.io/control-plane": "",
+                    "node-role.kubernetes.io/worker": ""
+                }
+            },
+            "spec": {
+                "taints": [{ "key": "dedicated", "value": "gpu", "effect": "NoSchedule" }]
+            },
+            "status": {
+                "nodeInfo": {
+                    "architecture": "arm64",
+                    "bootID": "b1",
+                    "containerRuntimeVersion": "containerd://1.7.20",
+                    "kernelVersion": "6.8.0",
+                    "kubeProxyVersion": "v1.31.1",
+                    "kubeletVersion": "v1.31.1",
+                    "machineID": "m1",
+                    "operatingSystem": "linux",
+                    "osImage": "Ubuntu 24.04",
+                    "systemUUID": "s1"
+                },
+                "addresses": [{ "type": "InternalIP", "address": "10.0.0.5" }],
+                "capacity": { "cpu": "4", "pods": "110" },
+                "allocatable": { "cpu": "3900m", "pods": "110" }
+            }
+        }))
+        .expect("a Node");
+
+        let sections = node_sections(&node);
+        assert_eq!(
+            titles(&sections),
+            ["Node", "Addresses", "Capacity", "Taints"]
+        );
+        let identity = section(&sections, "Node").expect("a Node section");
+        assert_eq!(
+            serde_json::to_value(row(identity, "Roles").expect("roles")).unwrap(),
+            json!({ "badges": { "label": "Roles", "items": ["control-plane", "worker"] } })
+        );
+        let capacity = section(&sections, "Capacity").expect("a Capacity section");
+        assert_eq!(
+            serde_json::to_value(row(capacity, "Capacity").expect("capacity")).unwrap(),
+            json!({ "table": {
+                "label": "Capacity",
+                "columns": ["Resource", "Capacity", "Allocatable"],
+                "rows": [["cpu", "4", "3900m"], ["pods", "110", "110"]]
+            } })
+        );
+    }
+
+    #[test]
+    fn reads_a_binding_into_its_subjects_and_its_role() {
+        let binding: RoleBinding = serde_json::from_value(json!({
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "RoleBinding",
+            "metadata": { "name": "read", "namespace": "team-a" },
+            "roleRef": {
+                "apiGroup": "rbac.authorization.k8s.io",
+                "kind": "ClusterRole",
+                "name": "view"
+            },
+            "subjects": [
+                { "kind": "ServiceAccount", "name": "web", "namespace": "team-a" },
+                { "kind": "User", "name": "eugene" }
+            ]
+        }))
+        .expect("a RoleBinding");
+
+        let sections = role_binding_sections(&binding);
+        let access = section(&sections, "Access").expect("an Access section");
+        assert_eq!(
+            serde_json::to_value(row(access, "Subjects").expect("subjects")).unwrap(),
+            json!({ "table": {
+                "label": "Subjects",
+                "columns": ["Kind", "Name", "Namespace"],
+                "rows": [["ServiceAccount", "web", "team-a"], ["User", "eugene", "-"]]
+            } })
+        );
+        let DetailRow::Links { links, .. } = row(access, "Role").expect("a role") else {
+            panic!("the role should be a link");
+        };
+        assert_eq!(links[0].label, "ClusterRole view");
+        // A ClusterRole belongs to no namespace, so the link must not carry one.
+        assert_eq!(links[0].namespace, "");
+        assert_eq!(
+            links[0].target,
+            Some(WatchTarget::Kind(ResourceKind::ClusterRoles))
+        );
+    }
+
+    /// RBAC spells "everything" as an empty list, and so does the panel.
+    #[test]
+    fn reads_a_role_rule_with_its_wildcards() {
+        let role: Role = serde_json::from_value(json!({
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "Role",
+            "metadata": { "name": "reader", "namespace": "team-a" },
+            "rules": [
+                { "verbs": ["get", "list"], "resources": ["pods"] },
+                { "verbs": ["get"], "nonResourceURLs": ["/healthz"] }
+            ]
+        }))
+        .expect("a Role");
+
+        let sections = role_sections(&role);
+        let rules = section(&sections, "Rules").expect("a Rules section");
+        assert_eq!(
+            serde_json::to_value(row(rules, "Rules").expect("rules")).unwrap(),
+            json!({ "table": {
+                "label": "Rules",
+                "columns": ["Resources", "Verbs", "API groups", "Resource names"],
+                "rows": [["pods", "get, list", "*", "*"], ["/healthz", "get", "*", "*"]]
+            } })
+        );
+    }
+
+    #[test]
+    fn reads_a_service_accounts_secrets_as_links() {
+        let account: ServiceAccount = serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": "ServiceAccount",
+            "metadata": { "name": "web", "namespace": "team-a" },
+            "secrets": [{ "name": "web-token" }],
+            "imagePullSecrets": [{ "name": "regcred" }]
+        }))
+        .expect("a ServiceAccount");
+
+        let sections = service_account_sections(&account);
+        let references = section(&sections, "References").expect("a References section");
+        let DetailRow::Links { links, .. } = row(references, "Pull secrets").expect("pull secrets")
+        else {
+            panic!("pull secrets should be links");
+        };
+        assert_eq!(links[0].label, "regcred");
+        assert_eq!(links[0].namespace, "team-a");
+        assert_eq!(
+            links[0].target,
+            Some(WatchTarget::Kind(ResourceKind::Secrets))
+        );
+    }
+
+    /// A pod's own rows: where it runs, where it may land, what it mounts.
+    #[test]
+    fn reads_a_pod_into_where_it_runs_and_what_it_mounts() {
+        let pod: Pod = serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": { "name": "web-1", "namespace": "team-a" },
+            "spec": {
+                "nodeName": "node-a",
+                "serviceAccountName": "grafana",
+                "restartPolicy": "Always",
+                "nodeSelector": { "kubernetes.io/os": "linux" },
+                "tolerations": [
+                    { "key": "dedicated", "operator": "Equal", "value": "gpu", "effect": "NoSchedule" }
+                ],
+                "containers": [{ "name": "app", "image": "grafana/grafana:11.2.0" }],
+                "volumes": [
+                    { "name": "config", "configMap": { "name": "grafana-config" } },
+                    { "name": "storage", "persistentVolumeClaim": { "claimName": "grafana-data" } }
+                ]
+            },
+            "status": {
+                "podIP": "10.42.3.19",
+                "qosClass": "Burstable",
+                "containerStatuses": [{
+                    "name": "app",
+                    "image": "grafana/grafana:11.2.0",
+                    "imageID": "grafana/grafana@sha256:1",
+                    "ready": true,
+                    "restartCount": 12,
+                    "state": {}
+                }]
+            }
+        }))
+        .expect("a Pod");
+
+        let sections = pod_sections(&pod);
+        assert_eq!(titles(&sections), ["Pod", "Scheduling", "Volumes"]);
+        let pod_section = section(&sections, "Pod").expect("a Pod section");
+        assert_eq!(
+            serde_json::to_value(row(pod_section, "Restarts").expect("restarts")).unwrap(),
+            json!({ "text": { "label": "Restarts", "value": "12" } })
+        );
+        let DetailRow::Links { links, .. } =
+            row(pod_section, "Service account").expect("an account")
+        else {
+            panic!("the service account should be a link");
+        };
+        assert_eq!(links[0].name, "grafana");
+        assert_eq!(links[0].namespace, "team-a");
+
+        let scheduling = section(&sections, "Scheduling").expect("a Scheduling section");
+        assert_eq!(
+            serde_json::to_value(row(scheduling, "Tolerations").expect("tolerations")).unwrap(),
+            json!({ "list": { "label": "Tolerations", "items": ["dedicated=gpu: NoSchedule"] } })
+        );
+        let volumes = section(&sections, "Volumes").expect("a Volumes section");
+        assert_eq!(
+            serde_json::to_value(row(volumes, "Volumes").expect("volumes")).unwrap(),
+            json!({ "table": {
+                "label": "Volumes",
+                "columns": ["Name", "Type", "Source"],
+                "rows": [
+                    ["config", "ConfigMap", "grafana-config"],
+                    ["storage", "PersistentVolumeClaim", "grafana-data"]
+                ]
+            } })
+        );
+    }
+
+    #[test]
+    fn reads_a_deployment_into_its_rollout_and_its_images() {
+        let deployment: Deployment = serde_json::from_value(json!({
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": { "name": "web", "namespace": "team-a" },
+            "spec": {
+                "selector": { "matchLabels": { "app": "web" } },
+                "strategy": {
+                    "type": "RollingUpdate",
+                    "rollingUpdate": { "maxSurge": "25%", "maxUnavailable": 1 }
+                },
+                "template": { "spec": { "containers": [{ "name": "app", "image": "web:1.2" }] } }
+            },
+            "status": { "updatedReplicas": 4, "availableReplicas": 3, "unavailableReplicas": 1 }
+        }))
+        .expect("a Deployment");
+
+        let sections = deployment_sections(&deployment);
+        let deployment = section(&sections, "Deployment").expect("a Deployment section");
+        assert_eq!(
+            serde_json::to_value(row(deployment, "Strategy").expect("a strategy")).unwrap(),
+            json!({ "text": { "label": "Strategy", "value": "RollingUpdate 25% / 1" } })
+        );
+        assert_eq!(
+            serde_json::to_value(row(deployment, "Selector").expect("a selector")).unwrap(),
+            json!({ "badges": { "label": "Selector", "items": ["app=web"] } })
+        );
     }
 }

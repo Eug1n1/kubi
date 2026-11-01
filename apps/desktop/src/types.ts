@@ -411,9 +411,18 @@ export type DetailSection = {
 export type DetailRow =
   | { text: { label: string; value: string } }
   | { list: { label: string; items: string[] } }
+  | { badges: { label: string; items: string[] } }
   | { table: { label: string; columns: string[]; rows: string[][] } }
+  | { ports: { label: string; ports: DetailPort[] } }
   | { links: { label: string; links: DetailLink[] } }
   | { conditions: { label: string; conditions: DetailCondition[] } };
+
+/** One port a Service exposes, as the panel needs it to offer a forward. */
+export type DetailPort = {
+  label: string;
+  port: number;
+  proto: string;
+};
 
 /**
  * Somewhere the object points at. `target` is null when the engine has no view

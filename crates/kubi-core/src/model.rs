@@ -441,10 +441,22 @@ pub enum DetailRow {
         label: String,
         items: Vec<String>,
     },
+    /// Short values that read as chips rather than as a bulleted list: a
+    /// selector, a set of addresses.
+    Badges {
+        label: String,
+        items: Vec<String>,
+    },
     Table {
         label: String,
         columns: Vec<String>,
         rows: Vec<Vec<String>>,
+    },
+    /// Ports the panel offers to forward. The number and protocol travel with
+    /// the label because only the front end knows whether a forward is possible.
+    Ports {
+        label: String,
+        ports: Vec<DetailPort>,
     },
     Links {
         label: String,
@@ -454,6 +466,15 @@ pub enum DetailRow {
         label: String,
         conditions: Vec<DetailCondition>,
     },
+}
+
+/// One port a Service exposes, as the panel needs it to offer a forward.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetailPort {
+    pub label: String,
+    pub port: u16,
+    pub proto: String,
 }
 
 /// Somewhere the object points at. `target` is absent when the engine cannot
@@ -965,6 +986,18 @@ mod serde_tests {
                         columns: vec!["Key".into(), "Value".into()],
                         rows: vec![vec!["app".into(), "web".into()]],
                     },
+                    DetailRow::Badges {
+                        label: "Selector".into(),
+                        items: vec!["app=web".into()],
+                    },
+                    DetailRow::Ports {
+                        label: "Ports".into(),
+                        ports: vec![DetailPort {
+                            label: "http: 80/TCP".into(),
+                            port: 80,
+                            proto: "TCP".into(),
+                        }],
+                    },
                 ],
             }],
         };
@@ -982,6 +1015,11 @@ mod serde_tests {
                                 "label": "Labels",
                                 "columns": ["Key", "Value"],
                                 "rows": [["app", "web"]]
+                            } },
+                            { "badges": { "label": "Selector", "items": ["app=web"] } },
+                            { "ports": {
+                                "label": "Ports",
+                                "ports": [{ "label": "http: 80/TCP", "port": 80, "proto": "TCP" }]
                             } }
                         ]
                     }]

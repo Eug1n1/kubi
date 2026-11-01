@@ -13,7 +13,7 @@ import { ArgoScreen, Detail, OverviewScreen, PinnedSplash, ResourceScreen, Searc
 import { DEFAULT_KEYMAP } from "../src/keymap";
 import { DEFAULT_THEME, BUILTIN_THEMES, themeTokens } from "../src/theme";
 import type { Kubi } from "../src/useKubi";
-import type { ClusterOverview, DetailSection, EventInfo, LogSnapshot, ResourceRow, Tab } from "../src/types";
+import type { ClusterOverview, DetailSection, EventInfo, LogSnapshot, ResourceKind, ResourceRow, Tab } from "../src/types";
 
 const row = (
   uid: string,
@@ -59,8 +59,259 @@ const events: EventInfo[] = [
   { kind: "Normal", reason: "Scheduled", message: "Successfully assigned grafana/grafana-deployment-85f7894766-qq7j4 to node-a", count: 1, ageSecs: 900, source: "default-scheduler" },
 ];
 
+/**
+ * The sections every object gets, so a kind's own ones can be shown where they
+ * land: between the status and the metadata lists.
+ */
+const metaSections = (kindSections: DetailSection[]): DetailSection[] => [
+  { title: "Object", rows: [{ text: { label: "UID", value: "8f2c1d40-1c4a-4b7e-9f2a-6d5e0a1b3c4d" } }] },
+  {
+    title: "Status",
+    rows: [
+      {
+        conditions: {
+          label: "Conditions",
+          conditions: [
+            { name: "Ready", status: "True", tone: "ok", reason: "", message: "", sinceSecs: 86_400 },
+          ],
+        },
+      },
+    ],
+  },
+  ...kindSections,
+  {
+    title: "Labels",
+    rows: [
+      {
+        table: {
+          label: "Labels",
+          columns: ["Key", "Value"],
+          rows: [["app.kubernetes.io/name", "grafana"]],
+        },
+      },
+    ],
+  },
+  {
+    title: "Annotations",
+    rows: [
+      {
+        table: {
+          label: "Annotations",
+          columns: ["Key", "Value"],
+          rows: [["deployment.kubernetes.io/revision", "7"]],
+        },
+      },
+    ],
+  },
+];
+
+/** Reachability, a selector and a port the panel offers to forward. */
+const serviceSections: DetailSection[] = [
+  {
+    title: "Service",
+    rows: [
+      { text: { label: "Type", value: "LoadBalancer" } },
+      { text: { label: "Cluster IP", value: "10.43.12.7" } },
+      { badges: { label: "Load balancer", items: ["34.89.12.4"] } },
+      {
+        badges: {
+          label: "Selector",
+          items: ["app.kubernetes.io/instance=grafana", "app.kubernetes.io/name=grafana"],
+        },
+      },
+      {
+        ports: {
+          label: "Ports",
+          ports: [
+            { label: "http: 80/TCP", port: 80, proto: "TCP" },
+            { label: "grafana: 3000/TCP", port: 3000, proto: "TCP" },
+            { label: "metrics: 9090/UDP", port: 9090, proto: "UDP" },
+          ],
+        },
+      },
+    ],
+  },
+];
+
+/** Identity, addresses, capacity next to allocatable, and taints. */
+const nodeSections: DetailSection[] = [
+  {
+    title: "Node",
+    rows: [
+      { badges: { label: "Roles", items: ["control-plane", "worker"] } },
+      { text: { label: "Kubelet", value: "v1.31.1" } },
+      { text: { label: "OS", value: "Ubuntu 24.04.1 LTS" } },
+      { text: { label: "Runtime", value: "containerd://1.7.20" } },
+      { text: { label: "Kernel", value: "6.8.0-45-generic" } },
+      { text: { label: "Architecture", value: "arm64" } },
+    ],
+  },
+  {
+    title: "Addresses",
+    rows: [
+      {
+        table: {
+          label: "Addresses",
+          columns: ["Type", "Address"],
+          rows: [
+            ["InternalIP", "10.0.0.5"],
+            ["Hostname", "node-a"],
+          ],
+        },
+      },
+    ],
+  },
+  {
+    title: "Capacity",
+    rows: [
+      {
+        table: {
+          label: "Capacity",
+          columns: ["Resource", "Capacity", "Allocatable"],
+          rows: [
+            ["cpu", "4", "3900m"],
+            ["ephemeral-storage", "101Gi", "91Gi"],
+            ["memory", "16Gi", "15Gi"],
+            ["pods", "110", "110"],
+          ],
+        },
+      },
+    ],
+  },
+  {
+    title: "Taints",
+    rows: [
+      {
+        table: {
+          label: "Taints",
+          columns: ["Key", "Value", "Effect"],
+          rows: [["dedicated", "gpu", "NoSchedule"]],
+        },
+      },
+    ],
+  },
+];
+
+/** Who a binding binds, and the role it points at. */
+const bindingSections: DetailSection[] = [
+  {
+    title: "Access",
+    rows: [
+      {
+        table: {
+          label: "Subjects",
+          columns: ["Kind", "Name", "Namespace"],
+          rows: [
+            ["ServiceAccount", "grafana", "grafana"],
+            ["User", "eugene", "-"],
+          ],
+        },
+      },
+      {
+        links: {
+          label: "Role",
+          links: [
+            {
+              label: "ClusterRole view",
+              namespace: "",
+              name: "view",
+              target: { kind: "clusterRoles" },
+            },
+          ],
+        },
+      },
+    ],
+  },
+];
+/** What a Role allows, one row per rule. */
+const roleSections: DetailSection[] = [
+  {
+    title: "Rules",
+    rows: [
+      {
+        table: {
+          label: "Rules",
+          columns: ["Resources", "Verbs", "API groups", "Resource names"],
+          rows: [
+            ["pods, pods/log", "get, list, watch", "", "grafana-*"],
+            ["/healthz", "get", "*", "*"],
+          ],
+        },
+      },
+    ],
+  },
+];
+
+/** What a Deployment has rolled out, and the images it runs. */
+const deploymentSections: DetailSection[] = [
+  {
+    title: "Deployment",
+    rows: [
+      { text: { label: "Updated", value: "4" } },
+      { text: { label: "Available", value: "3" } },
+      { text: { label: "Unavailable", value: "1" } },
+      { text: { label: "Strategy", value: "RollingUpdate 25% / 25%" } },
+      { badges: { label: "Selector", items: ["app.kubernetes.io/name=grafana"] } },
+      { list: { label: "Images", items: ["grafana/grafana:11.2.0"] } },
+    ],
+  },
+];
+
+/** What a pod is, where it may land, and the volumes it mounts. */
+const podKindSections: DetailSection[] = [
+  {
+    title: "Pod",
+    rows: [
+      { text: { label: "Node", value: "node-a" } },
+      { text: { label: "Pod IP", value: "10.42.3.19" } },
+      { text: { label: "QoS", value: "Burstable" } },
+      { text: { label: "Restart policy", value: "Always" } },
+      { text: { label: "Restarts", value: "12" } },
+      {
+        links: {
+          label: "Service account",
+          links: [
+            {
+              label: "grafana",
+              namespace: "grafana",
+              name: "grafana",
+              target: { kind: "serviceAccounts" },
+            },
+          ],
+        },
+      },
+      { list: { label: "Images", items: ["grafana/grafana:11.2.0"] } },
+    ],
+  },
+  {
+    title: "Scheduling",
+    rows: [
+      { badges: { label: "Node selector", items: ["kubernetes.io/os=linux"] } },
+      { list: { label: "Tolerations", items: ["dedicated=gpu: NoSchedule"] } },
+    ],
+  },
+  {
+    title: "Volumes",
+    rows: [
+      {
+        table: {
+          label: "Volumes",
+          columns: ["Name", "Type", "Source"],
+          rows: [
+            ["config", "ConfigMap", "grafana-config"],
+            ["storage", "PersistentVolumeClaim", "grafana-data"],
+          ],
+        },
+      },
+    ],
+  },
+];
+
+
 /** What the engine reads off the selected pod: the sections the panel stacks. */
 const sections: DetailSection[] = [
+
+
   {
     title: "Object",
     rows: [
@@ -353,6 +604,18 @@ const detail = (detailTab: Tab["detailTab"], width = 460) => {
   return renderToStaticMarkup(<Detail kubi={kubi} width={width} onWidth={noop} />);
 };
 
+/** The panel for another kind: the same shell, that kind's own sections. */
+const detailOf = (resource: ResourceKind, kindSections: DetailSection[], width = 460) => {
+  const activeTab: Tab = {
+    ...tab("overview", "u1"),
+    view: { kind: "resource", resource },
+    detail: metaSections(kindSections),
+    detailFor: "u1",
+  };
+  const kubi = kubiFor(activeTab);
+  return renderToStaticMarkup(<Detail kubi={kubi} width={width} onWidth={noop} />);
+};
+
 /** Every About state side by side: idle, busy, settled, and failed. */
 const aboutStates = (): string => {
   const states: [string, AboutStatus][] = [
@@ -428,6 +691,12 @@ const pages: [string, string, string?][] = [
   ["Object list — pods", listOnly()],
   ["Detail — overview with warnings", detail("overview")],
   ["Detail — overview at its narrowest", detail("overview", 280)],
+  ["Detail — service", detailOf("services", serviceSections)],
+  ["Detail — pod sections", detailOf("pods", podKindSections)],
+  ["Detail — deployment", detailOf("deployments", deploymentSections)],
+  ["Detail — role", detailOf("roles", roleSections)],
+  ["Detail — node", detailOf("nodes", nodeSections)],
+  ["Detail — role binding", detailOf("roleBindings", bindingSections)],
   ["Detail — events", detail("events")],
   ["Overview screen", renderToStaticMarkup(<OverviewScreen kubi={kubiFor(tab("overview", null))} />)],
   ["Argo screen", renderToStaticMarkup(<ArgoScreen kubi={argoKubi()} />)],

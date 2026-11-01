@@ -1063,13 +1063,16 @@ export function Detail({ kubi, width, onWidth }: { kubi: Kubi; width: number; on
             ageSecs={liveAge(row.ageSecs, tab.observedAt, kubi.now)}
             warnings={warnings}
             onEvents={warnings.length > 0 ? () => kubi.setDetailTab("events") : undefined}
-            onServicePort={
-              kind === "services" ? (port) => kubi.forwardServicePort(row.namespace, row.name, port) : undefined
-            }
             containers={tab.containers}
             containersReady={tab.containersFor === tab.selected}
             sections={tab.detailFor === tab.selected ? tab.detail : null}
-            onOpen={(target, namespace, name) => kubi.openNamed(target, namespace, name, tab.context)}
+            actions={{
+              open: (target, namespace, name) => kubi.openNamed(target, namespace, name, tab.context),
+              forward:
+                kind === "services"
+                  ? (port) => kubi.forwardServicePort(row.namespace, row.name, port)
+                  : undefined,
+            }}
           />
         ) : null}
         {tab.detailTab === "yaml" ? (
@@ -1752,6 +1755,23 @@ function RingCard({ title, value, total, legend }: { title: string; value: numbe
   );
 }
 
+/**
+ * Live usage, which the object does not carry: it comes from the metrics API, so
+ * it is read off the row rather than out of the detail sections.
+ */
+function UsageCard({ row }: { row: ResourceRow }) {
+  const cpu = formatCpuPair(row.cpuMillis, row.cpuRequestMillis);
+  const memory = formatBytesPair(row.memBytes, row.memRequestBytes);
+  if (cpu === "-" && memory === "-") return null;
+  return (
+    <section className="card">
+      <h2>Usage</h2>
+      {cpu !== "-" ? <Meta label="CPU" value={cpu} /> : null}
+      {memory !== "-" ? <Meta label="Memory" value={memory} /> : null}
+    </section>
+  );
+}
+
 function OverviewTab({
   row,
   kind,
@@ -1759,11 +1779,10 @@ function OverviewTab({
   ageSecs,
   warnings,
   onEvents,
-  onServicePort,
   containers,
   containersReady,
   sections,
-  onOpen,
+  actions,
 }: {
   row: ResourceRow;
   kind: ResourceKind | null;
@@ -1771,11 +1790,10 @@ function OverviewTab({
   ageSecs: number;
   warnings: EventInfo[];
   onEvents?: () => void;
-  onServicePort?: (port: number) => void;
   containers: PodContainer[] | null;
   containersReady: boolean;
   sections: DetailSection[] | null;
-  onOpen: (target: WatchTarget, namespace: string, name: string) => void;
+  actions: RowActions;
 }) {
   const facts = resourceFacts(kind, row);
   return (
@@ -1808,7 +1826,7 @@ function OverviewTab({
       {sections == null ? (
         <p className="muted">Loading details…</p>
       ) : (
-        <DetailSections sections={sections} onOpen={onOpen} />
+        <DetailSections sections={sections} actions={actions} />
       )}
       {facts.length > 0 ? (
         <section className="card">
@@ -1816,22 +1834,6 @@ function OverviewTab({
           {facts.map((fact) =>
             fact.kind === "text" ? (
               <Meta key={fact.label} label={fact.label} value={fact.value} />
-            ) : fact.kind === "ports" ? (
-              <p key={fact.label} className="wrap">
-                <span className="muted">{fact.label} </span>
-                {fact.ports.map((item, index) => (
-                  <span key={`${item.label}-${index}`}>
-                    {index > 0 ? ", " : null}
-                    {item.proto === "TCP" && onServicePort ? (
-                      <button type="button" className="port" onClick={() => onServicePort(item.port)}>
-                        {item.label}
-                      </button>
-                    ) : (
-                      item.label
-                    )}
-                  </span>
-                ))}
-              </p>
             ) : fact.kind === "table" ? (
               <div key={fact.label} className="fact-block">
                 <p className="muted">{fact.label}</p>
@@ -1852,6 +1854,7 @@ function OverviewTab({
           )}
         </section>
       ) : null}
+      {kind === "pods" || kind === "nodes" ? <UsageCard row={row} /> : null}
       {kind === "pods" ? <ContainersCard ready={containersReady} containers={containers} /> : null}
     </div>
   );
@@ -2058,18 +2061,26 @@ function mountLabel(mount: PodMount): string {
   return parts.join(" · ");
 }
 
+/** What a row can ask the panel to do on its behalf. */
+type RowActions = {
+  /** Open another object in the view that shows it. */
+  open: (target: WatchTarget, namespace: string, name: string) => void;
+  /** Offer a port forward, for the kinds the cluster can forward from. */
+  forward?: (port: number) => void;
+};
+
 /** The sections the engine read from the object, in the order the panel shows them. */
 function DetailSections({
   sections,
-  onOpen,
+  actions,
 }: {
   sections: DetailSection[];
-  onOpen: (target: WatchTarget, namespace: string, name: string) => void;
+  actions: RowActions;
 }) {
   return (
     <>
       {orderSections(sections).map((section) => (
-        <DetailSectionCard key={section.title} section={section} onOpen={onOpen} />
+        <DetailSectionCard key={section.title} section={section} actions={actions} />
       ))}
     </>
   );
@@ -2077,10 +2088,10 @@ function DetailSections({
 
 function DetailSectionCard({
   section,
-  onOpen,
+  actions,
 }: {
   section: DetailSection;
-  onOpen: (target: WatchTarget, namespace: string, name: string) => void;
+  actions: RowActions;
 }) {
   const [open, setOpen] = useState(() => !startsFolded(section.title));
   return (
@@ -2093,7 +2104,7 @@ function DetailSectionCard({
       {open ? (
         <div>
           {section.rows.map((row, index) => (
-            <DetailRowView key={index} section={section.title} row={row} onOpen={onOpen} />
+            <DetailRowView key={index} section={section.title} row={row} actions={actions} />
           ))}
         </div>
       ) : null}
@@ -2104,11 +2115,11 @@ function DetailSectionCard({
 function DetailRowView({
   section,
   row,
-  onOpen,
+  actions,
 }: {
   section: string;
   row: DetailRow;
-  onOpen: (target: WatchTarget, namespace: string, name: string) => void;
+  actions: RowActions;
 }) {
   const caption = (label: string) => rowCaption(section, label);
   if ("text" in row) {
@@ -2118,6 +2129,43 @@ function DetailRowView({
         {label ? <span className="muted">{label} </span> : null}
         {row.text.value}
       </p>
+    );
+  }
+  if ("badges" in row) {
+    const label = caption(row.badges.label);
+    return (
+      <div className="fact-block">
+        {label ? <p className="muted">{label}</p> : null}
+        <p className="tag-list">
+          {row.badges.items.map((item) => (
+            <span key={item} className="tag">
+              {item}
+            </span>
+          ))}
+        </p>
+      </div>
+    );
+  }
+  if ("ports" in row) {
+    const label = caption(row.ports.label);
+    return (
+      <div className="fact-block">
+        {label ? <p className="muted">{label}</p> : null}
+        <p className="wrap">
+          {row.ports.ports.map((port, index) => (
+            <span key={`${port.label}-${index}`}>
+              {index > 0 ? ", " : null}
+              {port.proto === "TCP" && actions.forward ? (
+                <button type="button" className="port" onClick={() => actions.forward?.(port.port)}>
+                  {port.label}
+                </button>
+              ) : (
+                port.label
+              )}
+            </span>
+          ))}
+        </p>
+      </div>
     );
   }
   if ("list" in row) {
@@ -2160,7 +2208,7 @@ function DetailRowView({
                   <button
                     type="button"
                     className="link"
-                    onClick={() => onOpen(target, link.namespace, link.name)}
+                    onClick={() => actions.open(target, link.namespace, link.name)}
                   >
                     {link.label}
                   </button>
@@ -2203,13 +2251,10 @@ function DetailRowView({
 
 
 
-type ServicePort = { label: string; port: number; proto: string };
-
 type Fact =
   | { kind: "text"; label: string; value: string }
   | { kind: "list"; label: string; items: string[] }
-  | { kind: "table"; label: string; columns: string[]; rows: string[][] }
-  | { kind: "ports"; label: string; ports: ServicePort[] };
+  | { kind: "table"; label: string; columns: string[]; rows: string[][] };
 
 const LISTENER_COLUMNS = ["Name", "Protocol", "Port", "Hostname"];
 
@@ -2266,22 +2311,6 @@ function listFact(label: string, raw: string, split: string): Fact | null {
   return { kind: "list", label, items };
 }
 
-function portsFact(raw: string): Fact | null {
-  const ports = raw
-    .split(",")
-    .map((item) => item.trim())
-    .filter((item) => shown(item))
-    .flatMap((label) => {
-      const slash = label.lastIndexOf("/");
-      const number = Number(slash < 0 ? label : label.slice(0, slash));
-      const proto = (slash < 0 ? "TCP" : label.slice(slash + 1)).toUpperCase();
-      if (!Number.isInteger(number) || number < 1 || number > 65535) return [];
-      return [{ label, port: number, proto }];
-    });
-  if (ports.length === 0) return null;
-  return { kind: "ports", label: "Ports", ports };
-}
-
 function tableFact(label: string, raw: string, columns: string[]): Fact | null {
   const rows = raw
     .split("\n")
@@ -2300,45 +2329,22 @@ function cell(row: ResourceRow, key: string): string {
 }
 
 function resourceFacts(kind: ResourceKind | null, row: ResourceRow): Fact[] {
-  const cpu = formatCpuPair(row.cpuMillis, row.cpuRequestMillis);
-  const memory = formatBytesPair(row.memBytes, row.memRequestBytes);
   switch (kind) {
+    // These kinds read their own sections out of the object in the engine, so a
+    // row-derived list would only say it twice.
     case "pods":
-      return keep([
-        textFact("Node", cell(row, "node")),
-        textFact("IP", cell(row, "podIP")),
-        textFact("QoS", cell(row, "qos")),
-        textFact("Restarts", cell(row, "restarts")),
-        textFact("CPU", cpu),
-        textFact("Memory", memory),
-        listFact("Images", cell(row, "images"), "\n"),
-      ]);
     case "deployments":
-      return keep([
-        textFact("Updated", cell(row, "updated")),
-        textFact("Available", cell(row, "available")),
-        textFact("Unavailable", cell(row, "unavailable")),
-        textFact("Strategy", cell(row, "strategy")),
-        listFact("Images", cell(row, "images"), "\n"),
-      ]);
     case "replicaSets":
-      return keep([listFact("Images", cell(row, "images"), "\n")]);
     case "statefulSets":
-      return keep([
-        textFact("Current", cell(row, "current")),
-        textFact("Updated", cell(row, "updated")),
-        textFact("Service", cell(row, "service")),
-        textFact("Pod management", cell(row, "podManagement")),
-        listFact("Images", cell(row, "images"), "\n"),
-      ]);
     case "daemonSets":
-      return keep([
-        textFact("Current", cell(row, "current")),
-        textFact("Updated", cell(row, "updated")),
-        textFact("Available", cell(row, "available")),
-        textFact("Misscheduled", cell(row, "misscheduled")),
-        listFact("Images", cell(row, "images"), "\n"),
-      ]);
+    case "services":
+    case "nodes":
+    case "serviceAccounts":
+    case "roles":
+    case "clusterRoles":
+    case "roleBindings":
+    case "clusterRoleBindings":
+      return [];
     case "jobs":
       return keep([
         textFact("Completions", row.ready),
@@ -2355,14 +2361,6 @@ function resourceFacts(kind: ResourceKind | null, row: ResourceRow): Fact[] {
         textFact("Concurrency", cell(row, "concurrency")),
         textFact("Last schedule", cell(row, "lastSchedule")),
         listFact("Images", cell(row, "images"), "\n"),
-      ]);
-    case "services":
-      return keep([
-        textFact("Type", row.status),
-        textFact("Cluster IP", row.ready),
-        textFact("External IP", cell(row, "externalIP")),
-        textFact("Selector", cell(row, "selector")),
-        portsFact(row.info),
       ]);
     case "ingresses":
       return keep([
@@ -2393,17 +2391,6 @@ function resourceFacts(kind: ResourceKind | null, row: ResourceRow): Fact[] {
       return keep([textFact("Target", cell(row, "target")), textFact("Hostname", cell(row, "hostname"))]);
     case "referenceGrants":
       return keep([textFact("From", cell(row, "from")), textFact("To", cell(row, "to"))]);
-    case "nodes":
-      return keep([
-        textFact("Roles", row.info),
-        textFact("Kubelet", row.ready),
-        textFact("Internal IP", cell(row, "internalIP")),
-        textFact("OS", cell(row, "os")),
-        textFact("Runtime", cell(row, "runtime")),
-        textFact("Pods", cell(row, "pods")),
-        textFact("CPU", cpu),
-        textFact("Memory", memory),
-      ]);
     case "configMaps":
       return keep([textFact("Keys", row.ready), listFact("Data", cell(row, "keyList"), "\n")]);
     case "secrets":
@@ -2435,23 +2422,6 @@ function resourceFacts(kind: ResourceKind | null, row: ResourceRow): Fact[] {
         textFact("Reclaim", row.ready),
         textFact("Binding", cell(row, "binding")),
         textFact("Expansion", cell(row, "expansion")),
-      ]);
-    case "serviceAccounts":
-      return keep([
-        textFact("Secrets", row.ready),
-        textFact("Pull secrets", row.info),
-        listFact("Secret names", cell(row, "secretNames"), "\n"),
-        listFact("Pull secret names", cell(row, "pullNames"), "\n"),
-      ]);
-    case "roles":
-    case "clusterRoles":
-      return keep([textFact("Rules", row.ready), listFact("Rule list", cell(row, "ruleList"), "\n")]);
-    case "roleBindings":
-    case "clusterRoleBindings":
-      return keep([
-        textFact("Subjects", row.ready),
-        textFact("Role", row.info),
-        listFact("Subject names", cell(row, "subjectList"), "\n"),
       ]);
     case "namespaces":
       return keep([textFact("Phase", row.status)]);

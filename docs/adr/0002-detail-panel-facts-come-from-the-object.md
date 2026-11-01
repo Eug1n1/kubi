@@ -35,17 +35,26 @@ projection, and the panel needs the object.
 
 - `DetailRow` is a new enum in the protocol, so it belongs in
   `tests/protocol_mirror.rs`, and the event needs a line in `model::serde_tests`.
-- The generic sections ship first; the per-kind ones follow. Until they do,
-  `resourceFacts`'s per-kind switch and its branch that printed every cell stay,
-  because deleting them before their replacement lands would leave the panel
-  saying less than it does now. That switch is deleted with the per-kind
-  sections, and this record is amended when it goes.
+- The generic sections ship first; the per-kind ones follow, kind by kind. Until
+  a kind has its own sections, `resourceFacts`'s arm for it stays, because
+  deleting an arm before its replacement lands would leave the panel saying less
+  than it does now. An arm is deleted in the same change that adds the sections
+  replacing it, and the whole switch — including the branch that printed every
+  cell, which is all a custom resource has — goes when the last kind is
+  migrated. Twelve kinds have made the move so far; the record is amended again
+  when the switch goes.
+- A kind whose numbers are not on the object keeps them where they were: live
+  CPU and memory come from the metrics API, so pods and nodes read them off the
+  row into a Usage block rather than pretending the object carries them.
 - Age stays where it is. The Overview's Summary already shows a live age from
   the row, and a second, frozen copy in the Object section would disagree with
   it a minute later.
 - The layout table is keyed by section title, not by kind, so one section is
   folded or ordered the same way wherever it appears. A kind that needs its own
   arrangement needs a second axis in that table, not a second table.
+- A section the table does not name is a kind's own, so it lands between the
+  object's status and the metadata lists and keeps its arrival order among its
+  neighbours.
 - A custom resource gets the generic sections and no per-kind ones, which is
   what a CRD can honestly support.
 - Owner references link for the kinds that actually own objects — the workload

@@ -1295,6 +1295,22 @@ th.num, td.num {
   white-space: nowrap;
   color: var(--dim);
 }
+/* A selector or a set of addresses: short values that read as tags rather than
+   as a bulleted list. Not `chip` — the theme picker already owns that name. */
+.tag-list { display: flex; flex-wrap: wrap; gap: var(--sp1); margin: var(--sp1) 0 0; }
+.tag {
+  /* A tag never shrinks, so it moves to the next line whole; `anywhere` is the
+     last resort for one value longer than the row. */
+  flex: none;
+  max-width: 100%;
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+  background: var(--field);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
 
 .fold {
   display: flex;

@@ -30,8 +30,11 @@ end renders what it sends back. It runs on macOS, Windows and Linux.
 
 - A detail panel with the object's conditions and their reasons, its owner
   references as links that open the object that owns it, its labels and
-  annotations, and tabs for the object's manifest, its data, its sources, its
-  events and its metrics.
+  annotations, and, per kind, what the object actually says: a pod's volumes,
+  node selector and tolerations, a workload's rollout and images, a Service's
+  ports and selector, a Node's capacity next to what it will hand out, a Role's
+  rules, a binding's subjects. Tabs follow for the object's manifest, its data,
+  its sources, its events and its metrics.
 - Containers: image, ports, live state with the waiting reason or exit code,
   restarts, requests and limits, environment grouped by where each value comes
   from, and the volumes each container mounts.

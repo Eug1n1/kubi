@@ -184,8 +184,8 @@ fn the_parsers_find_the_protocol() {
     assert!(ts_tags(&source(TYPES), "Command").len() > 20);
     assert!(rust_variants(&source(MODEL), "AppEvent").len() > 20);
     assert!(ts_tags(&source(TYPES), "AppEvent").len() > 20);
-    assert_eq!(rust_variants(&source(MODEL), "DetailRow").len(), 5);
-    assert_eq!(ts_tags(&source(TYPES), "DetailRow").len(), 5);
+    assert_eq!(rust_variants(&source(MODEL), "DetailRow").len(), 7);
+    assert_eq!(ts_tags(&source(TYPES), "DetailRow").len(), 7);
 }
 
 #[test]
