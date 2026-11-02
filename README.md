@@ -33,8 +33,11 @@ end renders what it sends back. It runs on macOS, Windows and Linux.
   annotations, and, per kind, what the object actually says: a pod's volumes,
   node selector and tolerations, a workload's rollout and images, a Service's
   ports and selector, a Node's capacity next to what it will hand out, a Role's
-  rules, a binding's subjects. It keeps up with the object: the facts and the
-  container states change as the cluster changes them, without clicking the row
+  rules, a binding's subjects. Under that, the objects it points at — a Service's
+  pods, a Deployment's ReplicaSets and pods, a Node's pods, an Ingress's
+  Services — each a list you can open, capped at a hundred rows with a Show all
+  for the rest. It keeps up with the object: the facts, the container states and
+  the related counts change as the cluster changes them, without clicking the row
   again. Tabs follow for the object's manifest, its data, its sources, its events
   and its metrics.
 - Containers: image, ports, live state with the waiting reason or exit code,

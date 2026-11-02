@@ -13,6 +13,13 @@ shipped as.
 
 ### Added
 
+- The detail panel lists the objects a resource points at: the pods of a Service,
+  a workload or a Node, the ReplicaSets of a Deployment, and the Services an
+  Ingress sends traffic to. A pod's node and a volume's claim are links now. A
+  long list is capped at a hundred rows and says so — `Pods 100 of 312` — with a
+  Show all that asks for that one list, and the counts keep up while the object
+  stays selected. A list the cluster will not let Kubi read says so in its own
+  block instead of failing the panel.
 - The detail panel's Overview reads the object itself instead of the object's
   row in the list, so it now shows what the list cannot: every condition with
   its status, reason and age; the object's UID and resource version; its

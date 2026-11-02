@@ -164,6 +164,13 @@ fn status_tone_tags_are_mirrored() {
     assert_mirrored("StatusTone");
 }
 
+/// A relation's query is a one-key object like the rest of the protocol, so a
+/// renamed variant would stop the panel telling one relation from another.
+#[test]
+fn relation_query_tags_are_mirrored() {
+    assert_mirrored("RelationQuery");
+}
+
 /// A `DetailRow` is a one-key object like an `AppEvent`, so a row the engine
 /// renames stops rendering rather than failing loudly.
 #[test]
@@ -186,6 +193,8 @@ fn the_parsers_find_the_protocol() {
     assert!(ts_tags(&source(TYPES), "AppEvent").len() > 20);
     assert_eq!(rust_variants(&source(MODEL), "DetailRow").len(), 7);
     assert_eq!(ts_tags(&source(TYPES), "DetailRow").len(), 7);
+    assert_eq!(rust_variants(&source(MODEL), "RelationQuery").len(), 4);
+    assert_eq!(ts_tags(&source(TYPES), "RelationQuery").len(), 4);
 }
 
 #[test]

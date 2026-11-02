@@ -284,6 +284,16 @@ export type Command =
     }
   | { clearSelection: { window: string; context: string } }
   | { fetchOverview: { context: string } }
+  | {
+      fetchRelated: {
+        context: string;
+        namespace: string;
+        uid: string;
+        relations: RelationSpec[];
+        /** The one relation to return in full rather than up to the cap. */
+        expand: string | null;
+      };
+    }
   | { fetchEvents: { context: string; namespace: string; name: string; uid: string } }
   | { fetchWarnings: { context: string; namespace: string | null } }
   | {
@@ -364,7 +374,8 @@ export type AppEvent =
   | { metricsUnavailable: { context: string; kind: ResourceKind; message: string } }
   | { yaml: { context: string; uid: string; yaml: string } }
   | { objectData: { context: string; uid: string; entries: DataEntry[] } }
-  | { objectDetail: { context: string; uid: string; sections: DetailSection[] } }
+  | { objectDetail: { context: string; uid: string; sections: DetailSection[]; relations: RelationSpec[] } }
+  | { relatedRows: { context: string; uid: string; groups: RelatedGroup[] } }
   | { objectEvents: { context: string; uid: string; events: EventInfo[] } }
   | { warnings: { context: string; namespace: string | null; objects: ObjectWarning[] } }
   | { podSources: { context: string; uid: string } & PodSources }
@@ -441,6 +452,37 @@ export type DetailPort = {
   label: string;
   port: number;
   proto: string;
+};
+
+/**
+ * How a relation's rows are found. A relation carries the query rather than the
+ * rows, so the panel can tell a relation it has already read from one whose
+ * query has just changed.
+ */
+export type RelationQuery =
+  | { labels: { selector: string } }
+  | { fields: { selector: string } }
+  | { names: { names: string[] } }
+  | "children";
+
+/** A list the panel can ask for: what to call it, what kind, and how to find it. */
+export type RelationSpec = {
+  title: string;
+  kind: ResourceKind;
+  query: RelationQuery;
+};
+
+/** One relation's rows, with what the panel needs to say how complete they are. */
+export type RelatedGroup = {
+  title: string;
+  kind: ResourceKind;
+  /** How many the cluster holds, when the API server would say. */
+  total: number | null;
+  /** True when the cap cut the list short. */
+  truncated: boolean;
+  /** Why there are no rows, when the list could not be read at all. */
+  note: string | null;
+  rows: ResourceRow[];
 };
 
 /**
@@ -568,6 +610,15 @@ export type Tab = {
   /** Overview sections of the object, and the row they were read for. */
   detail: DetailSection[] | null;
   detailFor: string | null;
+  /** The objects the selected one points at, and the row they were read for. */
+  related: RelatedGroup[] | null;
+  relatedFor: string | null;
+  /** The queries behind `related`, so the panel can tell when one has changed. */
+  relatedSpecs: RelationSpec[];
+  /** When the relations were last asked for, for the refresh throttle. */
+  relatedAt: number;
+  /** The one relation the user asked to see in full. */
+  relatedExpand: string | null;
   events: EventInfo[] | null;
   eventsFor: string | null;
   sources: PodSources | null;

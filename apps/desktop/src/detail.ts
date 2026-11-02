@@ -1,4 +1,4 @@
-import type { DetailSection } from "./types";
+import type { DetailSection, RelatedGroup } from "./types";
 
 /** Where a section sits in the Overview tab, and whether it starts folded. */
 type SectionLayout = { order: number; folded?: boolean };
@@ -25,20 +25,59 @@ const LAYOUT: Record<string, SectionLayout> = {
  */
 const UNKNOWN_ORDER = 30;
 
+/** Where the related blocks sit among the sections the engine sends. */
+const RELATED_ORDER = 50;
+
+/** Where live usage sits: after the relations, before the metadata lists. */
+const USAGE_ORDER = 60;
+
 /**
- * The sections in the order the panel shows them. A section the layout does not
- * name keeps its arrival order, so a kind's own sections can be added to the
- * engine before the panel knows about them.
+ * A place in the Overview: a section the engine sent, or one of the panel's own
+ * blocks.
  */
-export function orderSections(sections: DetailSection[]): DetailSection[] {
-  return sections
-    .map((section, index) => ({ section, index }))
-    .sort((left, right) => {
-      const leftOrder = LAYOUT[left.section.title]?.order ?? UNKNOWN_ORDER;
-      const rightOrder = LAYOUT[right.section.title]?.order ?? UNKNOWN_ORDER;
-      return leftOrder - rightOrder || left.index - right.index;
-    })
-    .map((entry) => entry.section);
+export type Block =
+  | { kind: "section"; section: DetailSection }
+  | { kind: "facts" }
+  | { kind: "related" }
+  | { kind: "usage" };
+
+/**
+ * The Overview's blocks in order: the object's own rows, the objects it points
+ * at, the usage the object does not carry, then the metadata lists.
+ *
+ * Three of these come from somewhere other than the sections — the row-derived
+ * facts from the list, the related rows from a request of their own, the usage
+ * from the metrics API — so this is what keeps them in one order instead of
+ * leaving the Overview to place them by hand.
+ */
+export function overviewBlocks(
+  sections: DetailSection[],
+  extras: { facts?: boolean; related?: boolean; usage?: boolean } = {},
+): Block[] {
+  const blocks: { order: number; block: Block }[] = sections.map((section) => ({
+    order: LAYOUT[section.title]?.order ?? UNKNOWN_ORDER,
+    block: { kind: "section" as const, section },
+  }));
+  // A kind's row-derived facts are its own rows, so they land with them.
+  if (extras.facts) blocks.push({ order: UNKNOWN_ORDER, block: { kind: "facts" } });
+  if (extras.related) blocks.push({ order: RELATED_ORDER, block: { kind: "related" } });
+  if (extras.usage) blocks.push({ order: USAGE_ORDER, block: { kind: "usage" } });
+  return blocks
+    .map((entry, index) => ({ ...entry, index }))
+    .sort((left, right) => left.order - right.order || left.index - right.index)
+    .map((entry) => entry.block);
+}
+
+/**
+ * How complete a relation's list is: `100 of 312`, `100+`, or just the count. A
+ * relation that could not be read has no count to give, because the block says
+ * why instead — a header claiming `Services 0` above "not allowed" would be
+ * saying the cluster holds none.
+ */
+export function relatedCount(group: RelatedGroup): string | null {
+  if (group.note != null) return null;
+  if (!group.truncated) return String(group.rows.length);
+  return group.total == null ? `${group.rows.length}+` : `${group.rows.length} of ${group.total}`;
 }
 
 /** Whether a section is collapsed until the user opens it. */

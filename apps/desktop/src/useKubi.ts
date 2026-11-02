@@ -44,6 +44,8 @@ import type {
   PendingDelete,
   PendingSelect,
   PortForward,
+  RelatedGroup,
+  RelationSpec,
   ResourceKind,
   ResourceRow,
   RowMenu,
@@ -64,10 +66,31 @@ function omit<T>(map: Record<string, T>, key: string): Record<string, T> {
   return next;
 }
 
+/** Whether two sets of relation queries are the same, in the same order. */
+function sameSpecs(left: RelationSpec[], right: RelationSpec[]): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/** A tab's relation state before anything has been read for it. */
+function blankRelated() {
+  return {
+    related: null as RelatedGroup[] | null,
+    relatedFor: null as string | null,
+    relatedSpecs: [] as RelationSpec[],
+    relatedAt: 0,
+    relatedExpand: null as string | null,
+  };
+}
+
 /** Warning scan throttle: refreshes at most this often while a list is open. */
 const WARNINGS_TTL_MS = 8_000;
 /** ...and at least this often, so badges do not go stale. */
 const WARNINGS_REFRESH_MS = 20_000;
+
+/** Relation refresh: at most this often when the selected object changes. */
+const RELATED_TTL_MS = 8_000;
+/** ...and at least this often, so a pod count does not go stale. */
+const RELATED_REFRESH_MS = 20_000;
 
 type Session = {
   context: string | null;
@@ -107,6 +130,7 @@ function blankTab(view: View, context: string, namespace: string | null, id: num
     dataFor: null,
     detail: null,
     detailFor: null,
+    ...blankRelated(),
     events: null,
     eventsFor: null,
     sources: null,
@@ -836,6 +860,50 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
   }
 
   /**
+   * Reads the rows behind the selected object's relations. Called when a
+   * relation's query changes and on a timer, so a Service whose pods come and go
+   * does not keep a stale count.
+   */
+  function requestRelated(
+    index = session.current.active,
+    options: { force?: boolean } = {},
+  ) {
+    if (index == null) return;
+    const tab = session.current.tabs[index];
+    const row = tab?.rows.find((item) => item.uid === tab.selected);
+    const relations = tab?.relatedSpecs ?? [];
+    if (!tab || !row || relations.length === 0) return;
+    const now = Date.now();
+    // The first read for an object is not a refresh: the panel has nothing for it
+    // yet, so it goes at once. A refresh of an object already on screen waits for
+    // the floor, which is what stops a busy watch becoming a list per event.
+    const first = tab.relatedFor !== row.uid;
+    if (!first && !options.force && now - tab.relatedAt < RELATED_TTL_MS) return;
+    updateTabs((items) =>
+      items.map((item, i) => (i === index ? { ...item, relatedAt: now } : item)),
+    );
+    void send({
+      fetchRelated: {
+        context: tab.context,
+        namespace: row.namespace,
+        uid: row.uid,
+        relations,
+        expand: tab.relatedExpand,
+      },
+    });
+  }
+
+  /** Asks for one relation in full rather than up to the engine's cap. */
+  function showAllRelated(title: string) {
+    const index = session.current.active;
+    if (index == null) return;
+    updateTabs((items) =>
+      items.map((item, i) => (i === index ? { ...item, relatedExpand: title } : item)),
+    );
+    requestRelated(index, { force: true });
+  }
+
+  /**
    * Scans warning events once for the whole list, so rows carry a badge before
    * anything is selected. Throttled: the watch pushes rows often.
    */
@@ -913,7 +981,15 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
     // though the row has not changed.
     const key = `${tab.context}|${row.uid}|${tab.reveal ? 1 : 0}`;
     if (key === selectionSent.current) return;
+    // A different object is a different set of relations, so "show all" belongs
+    // to the object it was asked for and does not follow the selection.
+    const moved = !selectionSent.current.startsWith(`${tab.context}|${row.uid}|`);
     selectionSent.current = key;
+    if (moved && tab.relatedExpand != null) {
+      updateTabs((items) =>
+        items.map((item, i) => (i === index ? { ...item, relatedExpand: null } : item)),
+      );
+    }
     void send({
       selectObject: {
         window: ownLabel,
@@ -982,6 +1058,7 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
               dataFor: null,
               detail: null,
               detailFor: null,
+              ...blankRelated(),
               events: null,
               eventsFor: null,
               sources: null,
@@ -1072,6 +1149,7 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
                     dataFor: null,
                     detail: null,
                     detailFor: null,
+                    ...blankRelated(),
                     events: null,
                     eventsFor: null,
                     sources: null,
@@ -1324,6 +1402,7 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
                   dataFor: null,
                   detail: null,
                   detailFor: null,
+                  ...blankRelated(),
                   containers: null,
                   containersFor: null,
                 }
@@ -1398,10 +1477,30 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
       return;
     }
     if (key === "objectDetail" && "objectDetail" in event) {
+      const { context: from, uid, sections, relations } = event.objectDetail;
+      const index = session.current.tabs.findIndex(
+        (tab) => tab.context === from && tab.selected === uid,
+      );
+      if (index < 0) return;
+      const changed = !sameSpecs(session.current.tabs[index]?.relatedSpecs ?? [], relations);
+      updateTabs((items) =>
+        items.map((item, i) =>
+          i === index
+            ? { ...item, detail: sections, detailFor: uid, relatedSpecs: relations }
+            : item,
+        ),
+      );
+      // A relation whose query has changed is read again, and so is an object the
+      // panel has no rows for yet; a repeat of what is already on screen is not.
+      const fetched = session.current.tabs[index]?.relatedFor === uid;
+      if (relations.length > 0 && (changed || !fetched)) requestRelated(index);
+      return;
+    }
+    if (key === "relatedRows" && "relatedRows" in event) {
       updateTabs((items) =>
         items.map((tab) =>
-          tab.context === event.objectDetail.context && tab.selected === event.objectDetail.uid
-            ? { ...tab, detail: event.objectDetail.sections, detailFor: event.objectDetail.uid }
+          tab.context === event.relatedRows.context && tab.selected === event.relatedRows.uid
+            ? { ...tab, related: event.relatedRows.groups, relatedFor: event.relatedRows.uid }
             : tab,
         ),
       );
@@ -1849,7 +1948,16 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
     if (active == null || !context) return;
     requestWarnings(true);
     const id = window.setInterval(() => requestWarnings(true), WARNINGS_REFRESH_MS);
-    return () => window.clearInterval(id);
+    // A Service's own object does not change while its pods come and go, so the
+    // relations are asked for again on a timer as well as on a change.
+    const related = window.setInterval(
+      () => requestRelated(session.current.active, { force: true }),
+      RELATED_REFRESH_MS,
+    );
+    return () => {
+      window.clearInterval(id);
+      window.clearInterval(related);
+    };
   }, [active, context, activeNamespace]);
 
   return {
@@ -1985,6 +2093,7 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
       void send({ clearSelection: { window: ownLabel, context: tab.context } });
     },
     setDetailTab: showDetail,
+    showAllRelated,
     openLogs: () => {
       const index = session.current.active;
       const tab = index == null ? undefined : session.current.tabs[index];
@@ -2089,6 +2198,7 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
                 dataFor: null,
                 detail: null,
                 detailFor: null,
+                ...blankRelated(),
                 containers: null,
                 containersFor: null,
               }

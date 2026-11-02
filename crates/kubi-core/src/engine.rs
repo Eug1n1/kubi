@@ -14,8 +14,8 @@ use k8s_openapi::api::autoscaling::v2::HorizontalPodAutoscaler;
 use k8s_openapi::api::batch::v1::{CronJob, Job};
 use k8s_openapi::api::core::v1::{
     ConfigMap, Container, ContainerStatus, Endpoints, Event, KeyToPath, LimitRange, Namespace,
-    Node, PersistentVolume, PersistentVolumeClaim, Pod, PodSpec, ResourceQuota, Secret, Service,
-    ServiceAccount, ServiceSpec, Volume,
+    Node, PersistentVolume, PersistentVolumeClaim, PersistentVolumeClaimSpec, Pod, PodSpec,
+    ResourceQuota, Secret, Service, ServiceAccount, ServiceSpec, Volume,
 };
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use k8s_openapi::api::networking::v1::{Ingress, IngressClass, NetworkPolicy};
@@ -26,7 +26,7 @@ use k8s_openapi::api::rbac::v1::{
 use k8s_openapi::api::storage::v1::StorageClass;
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, Time};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, OwnerReference, Time};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use kube::api::{
     ApiResource, DeleteParams, DynamicObject, ListParams, LogParams, ObjectList, Patch, PatchParams,
@@ -46,7 +46,8 @@ use crate::model::{
     AppEvent, ArgoApp, ArgoAppSet, ArgoCluster, ArgoOverview, ArgoRepo, ClusterOverview, Command,
     CrTarget, DataEntry, DetailCondition, DetailLink, DetailPort, DetailRow, DetailSection,
     EventInfo, ObjectWarning, OverviewWarning, PodContainer, PodEnv, PodMount, PodValue,
-    ResourceKind, StatusTone, UsageSample, WatchTarget,
+    RelatedGroup, RelationQuery, RelationSpec, ResourceKind, ResourceRow, StatusTone, UsageSample,
+    WatchTarget,
 };
 use crate::quantity::{parse_bytes, parse_cpu_millis};
 use crate::rows::{
@@ -102,7 +103,7 @@ macro_rules! yaml_ns {
             $version,
             $kind,
             false,
-            |_: &$ty| Vec::new(),
+            |_: &$ty| no_rows(),
         )
         .await
     };
@@ -132,7 +133,7 @@ macro_rules! yaml_cluster {
             $version,
             $kind,
             false,
-            |_: &$ty| Vec::new(),
+            |_: &$ty| no_rows(),
         )
         .await
     };
@@ -398,6 +399,13 @@ impl Engine {
                 uid,
                 reveal_secrets,
             } => self.spawn_fetch(context, target, namespace, name, uid, reveal_secrets),
+            Command::FetchRelated {
+                context,
+                namespace,
+                uid,
+                relations,
+                expand,
+            } => self.spawn_related(context, namespace, uid, relations, expand),
             Command::FetchOverview { context } => self.fetch_overview(context),
             Command::FetchEvents {
                 context,
@@ -579,7 +587,7 @@ impl Engine {
                     namespaced::<Pod>(client.clone(), &namespace),
                     WatchTarget::Kind(kind),
                     pod_row,
-                    pod_sections,
+                    pod_detail,
                     Some(pod_containers_live),
                     cancel.clone(),
                     events.clone(),
@@ -602,7 +610,7 @@ impl Engine {
                     Api::<Node>::all(client.clone()),
                     WatchTarget::Kind(kind),
                     node_row,
-                    node_sections,
+                    node_detail,
                     None,
                     cancel.clone(),
                     events.clone(),
@@ -626,7 +634,7 @@ impl Engine {
                     kind,
                     Event,
                     event_row,
-                    no_sections,
+                    generic_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -640,7 +648,7 @@ impl Engine {
                     kind,
                     Deployment,
                     deployment_row,
-                    deployment_sections,
+                    deployment_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -654,7 +662,7 @@ impl Engine {
                     kind,
                     ReplicaSet,
                     replicaset_row,
-                    replica_set_sections,
+                    replica_set_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -668,7 +676,7 @@ impl Engine {
                     kind,
                     StatefulSet,
                     statefulset_row,
-                    stateful_set_sections,
+                    stateful_set_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -682,7 +690,7 @@ impl Engine {
                     kind,
                     DaemonSet,
                     daemonset_row,
-                    daemon_set_sections,
+                    daemon_set_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -696,7 +704,7 @@ impl Engine {
                     kind,
                     Job,
                     job_row,
-                    no_sections,
+                    generic_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -710,7 +718,7 @@ impl Engine {
                     kind,
                     CronJob,
                     cronjob_row,
-                    no_sections,
+                    generic_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -724,7 +732,7 @@ impl Engine {
                     kind,
                     Service,
                     service_row,
-                    service_sections,
+                    service_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -738,7 +746,7 @@ impl Engine {
                     kind,
                     Endpoints,
                     endpoints_row,
-                    no_sections,
+                    generic_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -752,7 +760,7 @@ impl Engine {
                     kind,
                     EndpointSlice,
                     endpointslice_row,
-                    no_sections,
+                    generic_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -766,7 +774,7 @@ impl Engine {
                     kind,
                     Ingress,
                     ingress_row,
-                    no_sections,
+                    ingress_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -780,7 +788,7 @@ impl Engine {
                     kind,
                     NetworkPolicy,
                     networkpolicy_row,
-                    no_sections,
+                    generic_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -794,7 +802,7 @@ impl Engine {
                     kind,
                     ConfigMap,
                     configmap_row,
-                    no_sections,
+                    generic_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -808,7 +816,7 @@ impl Engine {
                     kind,
                     Secret,
                     secret_row,
-                    no_sections,
+                    generic_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -822,7 +830,7 @@ impl Engine {
                     kind,
                     ResourceQuota,
                     resourcequota_row,
-                    no_sections,
+                    generic_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -836,7 +844,7 @@ impl Engine {
                     kind,
                     LimitRange,
                     limitrange_row,
-                    no_sections,
+                    generic_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -850,7 +858,7 @@ impl Engine {
                     kind,
                     HorizontalPodAutoscaler,
                     hpa_row,
-                    no_sections,
+                    generic_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -864,7 +872,7 @@ impl Engine {
                     kind,
                     PodDisruptionBudget,
                     pdb_row,
-                    no_sections,
+                    generic_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -878,7 +886,7 @@ impl Engine {
                     kind,
                     PersistentVolumeClaim,
                     pvc_row,
-                    no_sections,
+                    pvc_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -892,7 +900,7 @@ impl Engine {
                     kind,
                     ServiceAccount,
                     serviceaccount_row,
-                    service_account_sections,
+                    service_account_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -906,7 +914,7 @@ impl Engine {
                     kind,
                     Role,
                     role_row,
-                    role_sections,
+                    role_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -920,7 +928,7 @@ impl Engine {
                     kind,
                     RoleBinding,
                     rolebinding_row,
-                    role_binding_sections,
+                    role_binding_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -933,7 +941,7 @@ impl Engine {
                     kind,
                     Namespace,
                     namespace_row,
-                    no_sections,
+                    generic_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -946,7 +954,7 @@ impl Engine {
                     kind,
                     IngressClass,
                     ingressclass_row,
-                    no_sections,
+                    generic_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -959,7 +967,7 @@ impl Engine {
                     kind,
                     PersistentVolume,
                     pv_row,
-                    no_sections,
+                    pv_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -972,7 +980,7 @@ impl Engine {
                     kind,
                     StorageClass,
                     storageclass_row,
-                    no_sections,
+                    generic_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -985,7 +993,7 @@ impl Engine {
                     kind,
                     ClusterRole,
                     clusterrole_row,
-                    cluster_role_sections,
+                    cluster_role_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -998,7 +1006,7 @@ impl Engine {
                     kind,
                     ClusterRoleBinding,
                     clusterrolebinding_row,
-                    cluster_role_binding_sections,
+                    cluster_role_binding_detail,
                     cancel,
                     events,
                     self.live.clone(),
@@ -1009,7 +1017,7 @@ impl Engine {
                     Api::<CustomResourceDefinition>::all(client),
                     WatchTarget::Kind(kind),
                     crd_row,
-                    no_sections,
+                    generic_detail,
                     None,
                     cancel,
                     events,
@@ -1034,7 +1042,7 @@ impl Engine {
                     api,
                     WatchTarget::Kind(kind),
                     dynamic_row,
-                    no_sections,
+                    generic_detail,
                     None,
                     cancel,
                     events,
@@ -1060,7 +1068,7 @@ impl Engine {
             api,
             WatchTarget::Custom(target),
             dynamic_row,
-            no_sections,
+            generic_detail,
             None,
             cancel,
             self.events.clone(),
@@ -1497,6 +1505,38 @@ impl Engine {
         });
     }
 
+    /// The rows behind an object's relations. Each relation is resolved on its
+    /// own, so one that cannot be read still leaves the others on screen.
+    fn spawn_related(
+        &self,
+        context: String,
+        namespace: String,
+        uid: String,
+        relations: Vec<RelationSpec>,
+        expand: Option<String>,
+    ) {
+        let Some(client) = self.require_client(&context) else {
+            return;
+        };
+        let events = self.events.clone();
+        tokio::spawn(async move {
+            let mut groups = Vec::new();
+            for spec in relations {
+                let cap = if expand.as_deref() == Some(spec.title.as_str()) {
+                    RELATED_EXPANDED_LIMIT
+                } else {
+                    RELATED_LIMIT
+                };
+                groups.push(resolve_relation(&client, &spec, &namespace, &uid, cap).await);
+            }
+            let _ = events.send(AppEvent::RelatedRows {
+                context,
+                uid,
+                groups,
+            });
+        });
+    }
+
     fn spawn_events(&self, context: String, namespace: String, name: String, uid: String) {
         let Some(client) = self.require_client(&context) else {
             return;
@@ -1622,6 +1662,7 @@ impl Engine {
                         context: context.clone(),
                         uid: uid.clone(),
                         sections: detail.sections,
+                        relations: detail.relations,
                     });
                     let _ = events.send(AppEvent::PodContainers {
                         context,
@@ -1699,9 +1740,9 @@ where
 }
 
 /// A kind whose panel part is entirely generic: nothing is added on top of the
-/// sections every object gets.
-fn no_sections<K>(_: &K) -> Vec<DetailSection> {
-    Vec::new()
+/// sections every object gets, and nothing it points at.
+fn generic_detail<K>(_: &K) -> KindRows {
+    no_rows()
 }
 
 /// A pod's containers as the watch rebuilds them: the states come from the
@@ -1737,7 +1778,7 @@ fn emit_detail<K>(
     context: &str,
     object: &K,
     selection: &Selection,
-    to_sections: fn(&K) -> Vec<DetailSection>,
+    to_detail: fn(&K) -> KindRows,
     to_containers: Option<ContainersOf<K>>,
 ) where
     K: Serialize,
@@ -1745,12 +1786,14 @@ fn emit_detail<K>(
     let Ok(value) = serde_json::to_value(object) else {
         return;
     };
+    let rows = to_detail(object);
     let mut sections = object_sections(&value, now_secs());
-    sections.extend(to_sections(object));
+    sections.extend(rows.sections);
     let _ = events.send(AppEvent::ObjectDetail {
         context: context.to_string(),
         uid: selection.uid.clone(),
         sections,
+        relations: rows.relations,
     });
     let Some(to_containers) = to_containers else {
         return;
@@ -1781,7 +1824,7 @@ fn spawn_watch<K>(
     api: Api<K>,
     target: WatchTarget,
     to_row: fn(&K) -> crate::model::ResourceRow,
-    to_sections: fn(&K) -> Vec<DetailSection>,
+    to_detail: fn(&K) -> KindRows,
     to_containers: Option<ContainersOf<K>>,
     cancel: CancellationToken,
     events: std::sync::mpsc::Sender<AppEvent>,
@@ -1827,7 +1870,7 @@ fn spawn_watch<K>(
                     &context,
                     object,
                     &selection,
-                    to_sections,
+                    to_detail,
                     to_containers,
                 );
             }
@@ -2468,10 +2511,10 @@ async fn yaml_for(
     namespace: &str,
     name: &str,
     reveal_secrets: bool,
-) -> Result<(String, serde_json::Value, Vec<DetailSection>), String> {
+) -> Result<(String, serde_json::Value, KindRows), String> {
     match kind {
         ResourceKind::Pods => {
-            yaml_ns_detail!(client, namespace, name, Pod, "v1", "Pod", pod_sections)
+            yaml_ns_detail!(client, namespace, name, Pod, "v1", "Pod", pod_detail)
         }
         ResourceKind::Deployments => yaml_ns_detail!(
             client,
@@ -2480,7 +2523,7 @@ async fn yaml_for(
             Deployment,
             "apps/v1",
             "Deployment",
-            deployment_sections
+            deployment_detail
         ),
         ResourceKind::ReplicaSets => yaml_ns_detail!(
             client,
@@ -2489,7 +2532,7 @@ async fn yaml_for(
             ReplicaSet,
             "apps/v1",
             "ReplicaSet",
-            replica_set_sections
+            replica_set_detail
         ),
         ResourceKind::StatefulSets => yaml_ns_detail!(
             client,
@@ -2498,7 +2541,7 @@ async fn yaml_for(
             StatefulSet,
             "apps/v1",
             "StatefulSet",
-            stateful_set_sections
+            stateful_set_detail
         ),
         ResourceKind::DaemonSets => yaml_ns_detail!(
             client,
@@ -2507,7 +2550,7 @@ async fn yaml_for(
             DaemonSet,
             "apps/v1",
             "DaemonSet",
-            daemon_set_sections
+            daemon_set_detail
         ),
         ResourceKind::Jobs => yaml_ns!(client, namespace, name, Job, "batch/v1", "Job"),
         ResourceKind::CronJobs => {
@@ -2520,7 +2563,7 @@ async fn yaml_for(
             Service,
             "v1",
             "Service",
-            service_sections
+            service_detail
         ),
         ResourceKind::Endpoints => {
             yaml_ns!(client, namespace, name, Endpoints, "v1", "Endpoints")
@@ -2533,13 +2576,14 @@ async fn yaml_for(
             "discovery.k8s.io/v1",
             "EndpointSlice"
         ),
-        ResourceKind::Ingresses => yaml_ns!(
+        ResourceKind::Ingresses => yaml_ns_detail!(
             client,
             namespace,
             name,
             Ingress,
             "networking.k8s.io/v1",
-            "Ingress"
+            "Ingress",
+            ingress_detail
         ),
         ResourceKind::NetworkPolicies => yaml_ns!(
             client,
@@ -2559,7 +2603,7 @@ async fn yaml_for(
                 "v1",
                 "Secret",
                 !reveal_secrets,
-                |_: &Secret| Vec::new(),
+                |_: &Secret| no_rows(),
             )
             .await
         }
@@ -2593,13 +2637,14 @@ async fn yaml_for(
             "policy/v1",
             "PodDisruptionBudget"
         ),
-        ResourceKind::PersistentVolumeClaims => yaml_ns!(
+        ResourceKind::PersistentVolumeClaims => yaml_ns_detail!(
             client,
             namespace,
             name,
             PersistentVolumeClaim,
             "v1",
-            "PersistentVolumeClaim"
+            "PersistentVolumeClaim",
+            pvc_detail
         ),
         ResourceKind::ServiceAccounts => {
             yaml_ns_detail!(
@@ -2609,7 +2654,7 @@ async fn yaml_for(
                 ServiceAccount,
                 "v1",
                 "ServiceAccount",
-                service_account_sections
+                service_account_detail
             )
         }
         ResourceKind::Roles => yaml_ns_detail!(
@@ -2619,7 +2664,7 @@ async fn yaml_for(
             Role,
             "rbac.authorization.k8s.io/v1",
             "Role",
-            role_sections
+            role_detail
         ),
         ResourceKind::RoleBindings => yaml_ns_detail!(
             client,
@@ -2628,10 +2673,10 @@ async fn yaml_for(
             RoleBinding,
             "rbac.authorization.k8s.io/v1",
             "RoleBinding",
-            role_binding_sections
+            role_binding_detail
         ),
         ResourceKind::Nodes => {
-            yaml_cluster_detail!(client, name, Node, "v1", "Node", node_sections)
+            yaml_cluster_detail!(client, name, Node, "v1", "Node", node_detail)
         }
         ResourceKind::Namespaces => yaml_cluster!(client, name, Namespace, "v1", "Namespace"),
         ResourceKind::IngressClasses => yaml_cluster!(
@@ -2641,9 +2686,14 @@ async fn yaml_for(
             "networking.k8s.io/v1",
             "IngressClass"
         ),
-        ResourceKind::PersistentVolumes => {
-            yaml_cluster!(client, name, PersistentVolume, "v1", "PersistentVolume")
-        }
+        ResourceKind::PersistentVolumes => yaml_cluster_detail!(
+            client,
+            name,
+            PersistentVolume,
+            "v1",
+            "PersistentVolume",
+            pv_detail
+        ),
         ResourceKind::StorageClasses => yaml_cluster!(
             client,
             name,
@@ -2657,7 +2707,7 @@ async fn yaml_for(
             ClusterRole,
             "rbac.authorization.k8s.io/v1",
             "ClusterRole",
-            cluster_role_sections
+            cluster_role_detail
         ),
         ResourceKind::ClusterRoleBindings => yaml_cluster_detail!(
             client,
@@ -2665,7 +2715,7 @@ async fn yaml_for(
             ClusterRoleBinding,
             "rbac.authorization.k8s.io/v1",
             "ClusterRoleBinding",
-            cluster_role_binding_sections
+            cluster_role_binding_detail
         ),
         ResourceKind::CustomResourceDefinitions => yaml_cluster!(
             client,
@@ -2736,7 +2786,7 @@ async fn yaml_dynamic(
     namespaced: bool,
     namespace: &str,
     name: &str,
-) -> Result<(String, serde_json::Value, Vec<DetailSection>), String> {
+) -> Result<(String, serde_json::Value, KindRows), String> {
     let api = if namespaced && !namespace.is_empty() {
         Api::<DynamicObject>::namespaced_with(client, namespace, resource)
     } else {
@@ -2748,7 +2798,7 @@ async fn yaml_dynamic(
         &resource.api_version,
         &resource.kind,
         false,
-        |_: &DynamicObject| Vec::new(),
+        |_: &DynamicObject| no_rows(),
     )
     .await
 }
@@ -2875,10 +2925,10 @@ async fn read_yaml<K, F>(
     kind: &str,
     mask_secret: bool,
     detail: F,
-) -> Result<(String, serde_json::Value, Vec<DetailSection>), String>
+) -> Result<(String, serde_json::Value, KindRows), String>
 where
     K: Resource + Clone + DeserializeOwned + Serialize + std::fmt::Debug + Send + Sync,
-    F: FnOnce(&K) -> Vec<DetailSection> + Send,
+    F: FnOnce(&K) -> KindRows + Send,
 {
     let object = api.get(name).await.map_err(|err| err.to_string())?;
     let sections = detail(&object);
@@ -2942,6 +2992,195 @@ where
     K: Resource<DynamicType = ()> + Clone + DeserializeOwned + std::fmt::Debug,
 {
     list_query(api, labels, "").await
+}
+
+/// How many rows one relation shows before the panel has to ask for the rest.
+const RELATED_LIMIT: usize = 100;
+
+/// How many rows a relation shows once the panel asks for all of them. Large
+/// enough to be "all" in practice, bounded so a list cannot run away.
+const RELATED_EXPANDED_LIMIT: usize = 10_000;
+
+/// Lists at most `cap` objects, with how many the cluster holds and whether the
+/// cap cut the list short.
+///
+/// One row more than the cap is asked for, so "exactly the cap" and "more than
+/// the cap" stay different answers even when the API server reports no remainder.
+async fn list_capped<K>(
+    api: Api<K>,
+    labels: &str,
+    fields: &str,
+    cap: usize,
+) -> Result<(Vec<K>, Option<i64>, bool), String>
+where
+    K: Resource<DynamicType = ()> + Clone + DeserializeOwned + std::fmt::Debug,
+{
+    let mut params = ListParams::default().limit(cap as u32 + 1);
+    if !labels.is_empty() {
+        params = params.labels(labels);
+    }
+    if !fields.is_empty() {
+        params = params.fields(fields);
+    }
+    let page: ObjectList<K> = api.list(&params).await.map_err(|err| err.to_string())?;
+    let remaining = page.metadata.remaining_item_count;
+    let mut items = page.items;
+    let truncated = items.len() > cap;
+    let total = if truncated {
+        remaining.map(|remaining| items.len() as i64 + remaining)
+    } else {
+        Some(items.len() as i64)
+    };
+    items.truncate(cap);
+    Ok((items, total, truncated))
+}
+
+/// The pods a relation picks out.
+async fn related_pods(
+    client: &Client,
+    query: &RelationQuery,
+    namespace: &str,
+    cap: usize,
+) -> Result<(Vec<Pod>, Option<i64>, bool), String> {
+    match query {
+        RelationQuery::Labels { selector } => {
+            list_capped(
+                Api::<Pod>::namespaced(client.clone(), namespace),
+                selector,
+                "",
+                cap,
+            )
+            .await
+        }
+        // A node's pods come from everywhere, because a node is nowhere.
+        RelationQuery::Fields { selector } => {
+            list_capped(Api::<Pod>::all(client.clone()), "", selector, cap).await
+        }
+        _ => Err("a pod relation is read by a selector".to_string()),
+    }
+}
+
+/// Whether any of an object's owner references names this uid.
+fn owned_by(references: &[OwnerReference], uid: &str) -> bool {
+    !uid.is_empty() && references.iter().any(|reference| reference.uid == uid)
+}
+
+/// Cuts a filtered list down to the cap, with how many it held before the cut.
+///
+/// Owner references and backend names are not selectable, so these two relations
+/// are filtered here rather than by the API server, and the total is what the
+/// filter kept rather than what the cluster holds.
+fn cap_filtered<K>(mut items: Vec<K>, cap: usize) -> (Vec<K>, Option<i64>, bool) {
+    let total = items.len() as i64;
+    let truncated = items.len() > cap;
+    items.truncate(cap);
+    (items, Some(total), truncated)
+}
+
+/// The objects whose owner references name this one. Owner references are not
+/// selectable, so the kind is listed and filtered — bounded by the namespace
+/// rather than by the object, which is the cost of asking this question at all.
+async fn related_children(
+    client: &Client,
+    namespace: &str,
+    uid: &str,
+    cap: usize,
+) -> Result<(Vec<ReplicaSet>, Option<i64>, bool), String> {
+    let all = list_query(
+        Api::<ReplicaSet>::namespaced(client.clone(), namespace),
+        "",
+        "",
+    )
+    .await?;
+    let mine = all
+        .into_iter()
+        .filter(|item| {
+            owned_by(
+                item.metadata
+                    .owner_references
+                    .as_deref()
+                    .unwrap_or_default(),
+                uid,
+            )
+        })
+        .collect();
+    Ok(cap_filtered(mine, cap))
+}
+
+/// The Services a relation names. One list filtered by name, rather than a
+/// request per name.
+async fn related_services(
+    client: &Client,
+    names: &[String],
+    namespace: &str,
+    cap: usize,
+) -> Result<(Vec<Service>, Option<i64>, bool), String> {
+    let all = list_query(
+        Api::<Service>::namespaced(client.clone(), namespace),
+        "",
+        "",
+    )
+    .await?;
+    let mine = all
+        .into_iter()
+        .filter(|item| {
+            item.metadata
+                .name
+                .as_deref()
+                .is_some_and(|name| names.iter().any(|wanted| wanted == name))
+        })
+        .collect();
+    Ok(cap_filtered(mine, cap))
+}
+
+/// One relation's rows, as the panel will show them. A relation that cannot be
+/// read says so in its own block rather than failing the panel.
+async fn resolve_relation(
+    client: &Client,
+    spec: &RelationSpec,
+    namespace: &str,
+    uid: &str,
+    cap: usize,
+) -> RelatedGroup {
+    let resolved: Result<(Vec<ResourceRow>, Option<i64>, bool), String> =
+        match (spec.kind, &spec.query) {
+            (ResourceKind::Pods, _) => related_pods(client, &spec.query, namespace, cap).await.map(
+                |(items, total, truncated)| (items.iter().map(pod_row).collect(), total, truncated),
+            ),
+            (ResourceKind::ReplicaSets, RelationQuery::Children) => {
+                related_children(client, namespace, uid, cap).await.map(
+                    |(items, total, truncated)| {
+                        (items.iter().map(replicaset_row).collect(), total, truncated)
+                    },
+                )
+            }
+            (ResourceKind::Services, RelationQuery::Names { names }) => {
+                related_services(client, names, namespace, cap).await.map(
+                    |(items, total, truncated)| {
+                        (items.iter().map(service_row).collect(), total, truncated)
+                    },
+                )
+            }
+            _ => Err("Kubi has no way to read that relation".to_string()),
+        };
+    match resolved {
+        Ok((rows, total, truncated)) => RelatedGroup {
+            title: spec.title.clone(),
+            kind: spec.kind,
+            total,
+            truncated,
+            note: None,
+            rows,
+        },
+        Err(note) => RelatedGroup {
+            title: spec.title.clone(),
+            kind: spec.kind,
+            total: None,
+            truncated: false,
+            note: Some(note),
+            rows: Vec::new(),
+        },
+    }
 }
 
 async fn list_warnings(client: &Client) -> Result<Vec<Event>, String> {
@@ -4308,11 +4547,13 @@ async fn load_pod_detail(
     let value = serde_json::to_value(&pod).map_err(|err| err.to_string())?;
     let yaml = yaml::object_to_yaml(value.clone(), "v1", "Pod", false)?;
     let (config_maps, secrets) = load_referenced(client, namespace, &pod).await;
+    let rows = pod_detail(&pod);
     let mut sections = object_sections(&value, now_secs());
-    sections.extend(pod_sections(&pod));
+    sections.extend(rows.sections);
     Ok(PodDetail {
         yaml,
         sections,
+        relations: rows.relations,
         containers: pod_containers(&pod, &config_maps, &secrets, reveal),
         sources: PodSources {
             config_maps,
@@ -4325,6 +4566,7 @@ async fn load_pod_detail(
 struct PodDetail {
     yaml: String,
     sections: Vec<DetailSection>,
+    relations: Vec<RelationSpec>,
     containers: Vec<PodContainer>,
     sources: PodSources,
 }
@@ -4503,25 +4745,25 @@ async fn load_detail(
     let loaded = match &target {
         WatchTarget::Kind(ResourceKind::ConfigMaps) => load_configmap(client, &namespace, &name)
             .await
-            .map(|(yaml, value, entries)| (yaml, value, Vec::new(), entries)),
+            .map(|(yaml, value, entries)| (yaml, value, no_rows(), entries)),
         WatchTarget::Kind(ResourceKind::Secrets) => {
             load_secret(client, &namespace, &name, reveal_secrets)
                 .await
-                .map(|(yaml, value, entries)| (yaml, value, Vec::new(), entries))
+                .map(|(yaml, value, entries)| (yaml, value, no_rows(), entries))
         }
         WatchTarget::Kind(kind) => yaml_for(client, *kind, &namespace, &name, reveal_secrets)
             .await
-            .map(|(yaml, value, sections)| (yaml, value, sections, None)),
+            .map(|(yaml, value, rows)| (yaml, value, rows, None)),
         WatchTarget::Custom(target) => {
             let resource =
                 resource_of(&target.group, &target.version, &target.kind, &target.plural);
             yaml_dynamic(client, &resource, target.namespaced, &namespace, &name)
                 .await
-                .map(|(yaml, value, sections)| (yaml, value, sections, None))
+                .map(|(yaml, value, rows)| (yaml, value, rows, None))
         }
     };
     match loaded {
-        Ok((yaml, value, kind_sections, entries)) => {
+        Ok((yaml, value, kind_rows, entries)) => {
             let _ = events.send(AppEvent::Yaml {
                 context: context.clone(),
                 uid: uid.clone(),
@@ -4531,11 +4773,12 @@ async fn load_detail(
             // the typed struct, both from the read that just happened, so a
             // selection costs one request to the API server rather than two.
             let mut sections = object_sections(&value, now_secs());
-            sections.extend(kind_sections);
+            sections.extend(kind_rows.sections);
             let _ = events.send(AppEvent::ObjectDetail {
                 context: context.clone(),
                 uid: uid.clone(),
                 sections,
+                relations: kind_rows.relations,
             });
             if let Some(entries) = entries {
                 let _ = events.send(AppEvent::ObjectData {
@@ -4786,6 +5029,87 @@ fn section(title: &str, rows: Vec<Option<DetailRow>>) -> Option<DetailSection> {
     })
 }
 
+/// What a kind reads off its own object: the rows the panel shows, and the
+/// relations those rows point at.
+///
+/// The relations are queries, not results. Deriving them is a function of the
+/// object, so it is free and rides along with the sections the watch re-derives
+/// on every change; the rows behind them cost a request, and the panel asks for
+/// those separately.
+struct KindRows {
+    sections: Vec<DetailSection>,
+    relations: Vec<RelationSpec>,
+}
+
+/// The rows a kind reads, with the relations it points at. Sections that came out
+/// empty are dropped, and so is a relation whose query has nothing in it.
+fn kind_rows(
+    sections: Vec<Option<DetailSection>>,
+    relations: Vec<Option<RelationSpec>>,
+) -> KindRows {
+    KindRows {
+        sections: sections.into_iter().flatten().collect(),
+        relations: relations.into_iter().flatten().collect(),
+    }
+}
+
+/// A kind whose panel is entirely generic: nothing of its own, and nothing it
+/// points at.
+fn no_rows() -> KindRows {
+    KindRows {
+        sections: Vec::new(),
+        relations: Vec::new(),
+    }
+}
+
+/// A kind that reads rows but points at nothing.
+fn sections_only(sections: Vec<DetailSection>) -> KindRows {
+    KindRows {
+        sections,
+        relations: Vec::new(),
+    }
+}
+
+/// The pods a label selector picks out, as a relation.
+fn pods_by_labels(selector: &BTreeMap<String, String>) -> Option<RelationSpec> {
+    let labels = selector_badges(selector);
+    if labels.is_empty() {
+        return None;
+    }
+    Some(RelationSpec {
+        title: "Pods".to_string(),
+        kind: ResourceKind::Pods,
+        query: RelationQuery::Labels {
+            selector: labels.join(","),
+        },
+    })
+}
+
+/// The objects whose owner references name this one. Offered only when the object
+/// has a uid to match on, since that is what the reference holds.
+fn children_relation(uid: Option<&str>, title: &str, kind: ResourceKind) -> Option<RelationSpec> {
+    if uid.unwrap_or_default().is_empty() {
+        return None;
+    }
+    Some(RelationSpec {
+        title: title.to_string(),
+        kind,
+        query: RelationQuery::Children,
+    })
+}
+
+/// The objects this one names, as a relation. No names, no relation.
+fn names_relation(title: &str, kind: ResourceKind, names: Vec<String>) -> Option<RelationSpec> {
+    if names.is_empty() {
+        return None;
+    }
+    Some(RelationSpec {
+        title: title.to_string(),
+        kind,
+        query: RelationQuery::Names { names },
+    })
+}
+
 /// A label selector as `key=value` chips, in the order a `BTreeMap` gives, so two
 /// reads of one object agree.
 fn selector_badges(selector: &BTreeMap<String, String>) -> Vec<String> {
@@ -4808,7 +5132,7 @@ fn joined(items: &[String]) -> String {
 /// How a Service is reached, what it selects, and the ports the panel can offer
 /// to forward. The numbers travel with the labels because only the front end
 /// knows whether a forward is possible for this cluster.
-fn service_sections(service: &Service) -> Vec<DetailSection> {
+fn service_detail(service: &Service) -> KindRows {
     let spec = service.spec.as_ref();
     let rows = vec![
         text_row(
@@ -4839,7 +5163,12 @@ fn service_sections(service: &Service) -> Vec<DetailSection> {
         ),
         ports_row(spec),
     ];
-    section("Service", rows).into_iter().collect()
+    kind_rows(
+        vec![section("Service", rows)],
+        vec![spec
+            .and_then(|spec| spec.selector.as_ref())
+            .and_then(pods_by_labels)],
+    )
 }
 
 /// Where a LoadBalancer Service answers. One still being provisioned has no
@@ -4894,7 +5223,7 @@ fn ports_row(spec: Option<&ServiceSpec>) -> Option<DetailRow> {
 /// What a Node is and what it can hold. Its live usage is not on the object —
 /// that comes from the metrics API — so the panel keeps that in a block of its
 /// own rather than here.
-fn node_sections(node: &Node) -> Vec<DetailSection> {
+fn node_detail(node: &Node) -> KindRows {
     let status = node.status.as_ref();
     let info = status.and_then(|status| status.node_info.as_ref());
     let identity = section(
@@ -4978,10 +5307,25 @@ fn node_sections(node: &Node) -> Vec<DetailSection> {
         )],
     );
 
-    [identity, addresses, capacity, taints]
-        .into_iter()
-        .flatten()
-        .collect()
+    kind_rows(
+        vec![identity, addresses, capacity, taints],
+        vec![node_pods_relation(node)],
+    )
+}
+
+/// The pods the scheduler placed on this node.
+fn node_pods_relation(node: &Node) -> Option<RelationSpec> {
+    let name = node.metadata.name.clone().unwrap_or_default();
+    if name.is_empty() {
+        return None;
+    }
+    Some(RelationSpec {
+        title: "Pods".to_string(),
+        kind: ResourceKind::Pods,
+        query: RelationQuery::Fields {
+            selector: format!("spec.nodeName={name}"),
+        },
+    })
 }
 
 /// The roles a Node carries, read off its `node-role.kubernetes.io/*` labels.
@@ -5030,12 +5374,12 @@ fn quantity_text(quantity: Option<&Quantity>) -> String {
 
 /// What a Role allows, one row per rule. The object list can only say how many
 /// rules there are.
-fn role_sections(role: &Role) -> Vec<DetailSection> {
-    rules_section(role.rules.as_deref().unwrap_or_default())
+fn role_detail(role: &Role) -> KindRows {
+    sections_only(rules_section(role.rules.as_deref().unwrap_or_default()))
 }
 
-fn cluster_role_sections(role: &ClusterRole) -> Vec<DetailSection> {
-    rules_section(role.rules.as_deref().unwrap_or_default())
+fn cluster_role_detail(role: &ClusterRole) -> KindRows {
+    sections_only(rules_section(role.rules.as_deref().unwrap_or_default()))
 }
 
 fn rules_section(rules: &[PolicyRule]) -> Vec<DetailSection> {
@@ -5068,20 +5412,20 @@ fn rules_section(rules: &[PolicyRule]) -> Vec<DetailSection> {
 }
 
 /// Who a binding binds, and the role it binds them to.
-fn role_binding_sections(binding: &RoleBinding) -> Vec<DetailSection> {
-    access_section(
+fn role_binding_detail(binding: &RoleBinding) -> KindRows {
+    sections_only(access_section(
         binding.metadata.namespace.as_deref(),
         binding.subjects.as_deref().unwrap_or_default(),
         &binding.role_ref,
-    )
+    ))
 }
 
-fn cluster_role_binding_sections(binding: &ClusterRoleBinding) -> Vec<DetailSection> {
-    access_section(
+fn cluster_role_binding_detail(binding: &ClusterRoleBinding) -> KindRows {
+    sections_only(access_section(
         None,
         binding.subjects.as_deref().unwrap_or_default(),
         &binding.role_ref,
-    )
+    ))
 }
 
 fn access_section(
@@ -5132,7 +5476,7 @@ fn access_section(
 }
 
 /// The Secrets a ServiceAccount hands to the pods that use it, as links.
-fn service_account_sections(account: &ServiceAccount) -> Vec<DetailSection> {
+fn service_account_detail(account: &ServiceAccount) -> KindRows {
     let namespace = account.metadata.namespace.clone().unwrap_or_default();
     let secret_links = |label: &str, names: Vec<String>| -> Option<DetailRow> {
         let links: Vec<DetailLink> = names
@@ -5158,15 +5502,17 @@ fn service_account_sections(account: &ServiceAccount) -> Vec<DetailSection> {
         .flatten()
         .map(|reference| reference.name.clone())
         .collect();
-    section(
-        "References",
-        vec![
-            secret_links("Secrets", secrets),
-            secret_links("Pull secrets", pull_secrets),
-        ],
+    sections_only(
+        section(
+            "References",
+            vec![
+                secret_links("Secrets", secrets),
+                secret_links("Pull secrets", pull_secrets),
+            ],
+        )
+        .into_iter()
+        .collect(),
     )
-    .into_iter()
-    .collect()
 }
 /// A list of short strings as a row, dropped when it is empty.
 fn list_row(label: &str, items: Vec<String>) -> Option<DetailRow> {
@@ -5217,15 +5563,24 @@ fn pod_restarts(pod: &Pod) -> String {
 
 /// What a pod is and where it runs. Its live usage is not on the object, so the
 /// panel reads that off the row into a block of its own instead.
-fn pod_sections(pod: &Pod) -> Vec<DetailSection> {
+fn pod_detail(pod: &Pod) -> KindRows {
     let spec = pod.spec.as_ref();
     let status = pod.status.as_ref();
     let namespace = pod.metadata.namespace.clone().unwrap_or_default();
     let pod_rows = vec![
-        text_row(
+        links_row(
             "Node",
             spec.and_then(|spec| spec.node_name.clone())
-                .unwrap_or_default(),
+                .filter(|name| !name.is_empty())
+                .map(|name| DetailLink {
+                    label: name.clone(),
+                    // A node belongs to no namespace, and neither does the link.
+                    namespace: String::new(),
+                    name,
+                    target: Some(WatchTarget::Kind(ResourceKind::Nodes)),
+                })
+                .into_iter()
+                .collect(),
         ),
         text_row(
             "Pod IP",
@@ -5299,10 +5654,7 @@ fn pod_sections(pod: &Pod) -> Vec<DetailSection> {
         )],
     );
 
-    [section("Pod", pod_rows), scheduling, volumes]
-        .into_iter()
-        .flatten()
-        .collect()
+    kind_rows(vec![section("Pod", pod_rows), scheduling, volumes], vec![])
 }
 
 /// A pod's tolerations, one line each.
@@ -5365,10 +5717,10 @@ fn volume_row(volume: &Volume) -> Vec<String> {
 }
 
 /// What a Deployment has rolled out and how it rolls the next one out.
-fn deployment_sections(deployment: &Deployment) -> Vec<DetailSection> {
+fn deployment_detail(deployment: &Deployment) -> KindRows {
     let spec = deployment.spec.as_ref();
     let status = deployment.status.as_ref();
-    section(
+    let rows = section(
         "Deployment",
         vec![
             text_row(
@@ -5395,9 +5747,19 @@ fn deployment_sections(deployment: &Deployment) -> Vec<DetailSection> {
                 pod_images(spec.and_then(|spec| spec.template.spec.as_ref())),
             ),
         ],
+    );
+    kind_rows(
+        vec![rows],
+        vec![
+            spec.and_then(|spec| spec.selector.match_labels.as_ref())
+                .and_then(pods_by_labels),
+            children_relation(
+                deployment.metadata.uid.as_deref(),
+                "ReplicaSets",
+                ResourceKind::ReplicaSets,
+            ),
+        ],
     )
-    .into_iter()
-    .collect()
 }
 
 /// A rolling-update strategy as one line: `RollingUpdate 25% / 25%`.
@@ -5427,10 +5789,10 @@ fn int_or_percent(value: &IntOrString) -> String {
 }
 
 /// What a ReplicaSet holds, and the images it runs.
-fn replica_set_sections(replica_set: &ReplicaSet) -> Vec<DetailSection> {
+fn replica_set_detail(replica_set: &ReplicaSet) -> KindRows {
     let spec = replica_set.spec.as_ref();
     let status = replica_set.status.as_ref();
-    section(
+    let rows = section(
         "ReplicaSet",
         vec![
             text_row("Replicas", count(status.map(|status| status.replicas))),
@@ -5447,16 +5809,20 @@ fn replica_set_sections(replica_set: &ReplicaSet) -> Vec<DetailSection> {
                 ),
             ),
         ],
+    );
+    kind_rows(
+        vec![rows],
+        vec![spec
+            .and_then(|spec| spec.selector.match_labels.as_ref())
+            .and_then(pods_by_labels)],
     )
-    .into_iter()
-    .collect()
 }
 
 /// What a StatefulSet holds, and how it brings its pods up.
-fn stateful_set_sections(stateful_set: &StatefulSet) -> Vec<DetailSection> {
+fn stateful_set_detail(stateful_set: &StatefulSet) -> KindRows {
     let spec = stateful_set.spec.as_ref();
     let status = stateful_set.status.as_ref();
-    section(
+    let rows = section(
         "StatefulSet",
         vec![
             text_row(
@@ -5483,16 +5849,20 @@ fn stateful_set_sections(stateful_set: &StatefulSet) -> Vec<DetailSection> {
                 pod_images(spec.and_then(|spec| spec.template.spec.as_ref())),
             ),
         ],
+    );
+    kind_rows(
+        vec![rows],
+        vec![spec
+            .and_then(|spec| spec.selector.match_labels.as_ref())
+            .and_then(pods_by_labels)],
     )
-    .into_iter()
-    .collect()
 }
 
 /// What a DaemonSet has placed, and the images it runs.
-fn daemon_set_sections(daemon_set: &DaemonSet) -> Vec<DetailSection> {
+fn daemon_set_detail(daemon_set: &DaemonSet) -> KindRows {
     let spec = daemon_set.spec.as_ref();
     let status = daemon_set.status.as_ref();
-    section(
+    let rows = section(
         "DaemonSet",
         vec![
             text_row(
@@ -5517,9 +5887,173 @@ fn daemon_set_sections(daemon_set: &DaemonSet) -> Vec<DetailSection> {
                 pod_images(spec.and_then(|spec| spec.template.spec.as_ref())),
             ),
         ],
+    );
+    kind_rows(
+        vec![rows],
+        vec![spec
+            .and_then(|spec| spec.selector.match_labels.as_ref())
+            .and_then(pods_by_labels)],
     )
-    .into_iter()
-    .collect()
+}
+/// The Services an Ingress sends traffic to. An Ingress has no rows of its own in
+/// the panel yet, so this is the one thing it points at.
+fn ingress_detail(ingress: &Ingress) -> KindRows {
+    kind_rows(
+        vec![],
+        vec![names_relation(
+            "Services",
+            ResourceKind::Services,
+            ingress_service_names(ingress),
+        )],
+    )
+}
+
+/// Every Service name an Ingress's backends mention, in spec order and once each.
+fn ingress_service_names(ingress: &Ingress) -> Vec<String> {
+    let spec = ingress.spec.as_ref();
+    let mut names: Vec<String> = Vec::new();
+    let mut push = |name: &str| {
+        if !name.is_empty() && !names.iter().any(|known| known == name) {
+            names.push(name.to_string());
+        }
+    };
+    if let Some(service) = spec
+        .and_then(|spec| spec.default_backend.as_ref())
+        .and_then(|backend| backend.service.as_ref())
+    {
+        push(&service.name);
+    }
+    for rule in spec
+        .and_then(|spec| spec.rules.as_ref())
+        .into_iter()
+        .flatten()
+    {
+        let paths = rule
+            .http
+            .as_ref()
+            .map(|http| http.paths.as_slice())
+            .unwrap_or(&[]);
+        for path in paths {
+            if let Some(service) = path.backend.service.as_ref() {
+                push(&service.name);
+            }
+        }
+    }
+    names
+}
+
+/// What a claim asked for and what it bound to, with the volume as a link.
+fn pvc_detail(claim: &PersistentVolumeClaim) -> KindRows {
+    let spec = claim.spec.as_ref();
+    let status = claim.status.as_ref();
+    sections_only(
+        section(
+            "Storage",
+            vec![
+                text_row(
+                    "Phase",
+                    status
+                        .and_then(|status| status.phase.clone())
+                        .unwrap_or_default(),
+                ),
+                text_row("Size", requested_storage(spec)),
+                text_row(
+                    "Class",
+                    spec.and_then(|spec| spec.storage_class_name.clone())
+                        .unwrap_or_default(),
+                ),
+                links_row(
+                    "Volume",
+                    spec.and_then(|spec| spec.volume_name.clone())
+                        .map(|name| DetailLink {
+                            label: name.clone(),
+                            // A volume belongs to no namespace, and neither does
+                            // the link to it.
+                            namespace: String::new(),
+                            name,
+                            target: Some(WatchTarget::Kind(ResourceKind::PersistentVolumes)),
+                        })
+                        .into_iter()
+                        .collect(),
+                ),
+                badges_row(
+                    "Access modes",
+                    spec.and_then(|spec| spec.access_modes.clone())
+                        .unwrap_or_default(),
+                ),
+            ],
+        )
+        .into_iter()
+        .collect(),
+    )
+}
+
+/// The storage a claim asked for, as the API server wrote it.
+fn requested_storage(spec: Option<&PersistentVolumeClaimSpec>) -> String {
+    spec.and_then(|spec| spec.resources.as_ref())
+        .and_then(|resources| resources.requests.as_ref())
+        .and_then(|requests| requests.get("storage"))
+        .map(|quantity| quantity.0.clone())
+        .unwrap_or_default()
+}
+
+/// What a volume holds and which claim took it, with the claim as a link.
+fn pv_detail(volume: &PersistentVolume) -> KindRows {
+    let spec = volume.spec.as_ref();
+    let status = volume.status.as_ref();
+    let claim = spec.and_then(|spec| spec.claim_ref.as_ref());
+    sections_only(
+        section(
+            "Storage",
+            vec![
+                text_row(
+                    "Phase",
+                    status
+                        .and_then(|status| status.phase.clone())
+                        .unwrap_or_default(),
+                ),
+                text_row(
+                    "Size",
+                    quantity_text(
+                        spec.and_then(|spec| spec.capacity.as_ref())
+                            .and_then(|capacity| capacity.get("storage")),
+                    ),
+                ),
+                text_row(
+                    "Class",
+                    spec.and_then(|spec| spec.storage_class_name.clone())
+                        .unwrap_or_default(),
+                ),
+                text_row(
+                    "Reclaim",
+                    spec.and_then(|spec| spec.persistent_volume_reclaim_policy.clone())
+                        .unwrap_or_default(),
+                ),
+                links_row(
+                    "Claim",
+                    claim
+                        .and_then(|claim| claim.name.clone())
+                        .map(|name| DetailLink {
+                            label: name.clone(),
+                            namespace: claim
+                                .and_then(|claim| claim.namespace.clone())
+                                .unwrap_or_default(),
+                            name,
+                            target: Some(WatchTarget::Kind(ResourceKind::PersistentVolumeClaims)),
+                        })
+                        .into_iter()
+                        .collect(),
+                ),
+                badges_row(
+                    "Access modes",
+                    spec.and_then(|spec| spec.access_modes.clone())
+                        .unwrap_or_default(),
+                ),
+            ],
+        )
+        .into_iter()
+        .collect(),
+    )
 }
 
 async fn load_configmap(
@@ -7303,7 +7837,7 @@ mod detail_tests {
         }))
         .expect("a Service");
 
-        let sections = service_sections(&service);
+        let sections = service_detail(&service).sections;
         assert_eq!(titles(&sections), ["Service"]);
         let service = section(&sections, "Service").expect("a Service section");
         assert_eq!(
@@ -7335,7 +7869,7 @@ mod detail_tests {
         }))
         .expect("a Service");
 
-        let sections = service_sections(&service);
+        let sections = service_detail(&service).sections;
         let service = section(&sections, "Service").expect("a Service section");
         assert_eq!(
             serde_json::to_value(row(service, "Load balancer").expect("an address")).unwrap(),
@@ -7378,7 +7912,7 @@ mod detail_tests {
         }))
         .expect("a Node");
 
-        let sections = node_sections(&node);
+        let sections = node_detail(&node).sections;
         assert_eq!(
             titles(&sections),
             ["Node", "Addresses", "Capacity", "Taints"]
@@ -7417,7 +7951,7 @@ mod detail_tests {
         }))
         .expect("a RoleBinding");
 
-        let sections = role_binding_sections(&binding);
+        let sections = role_binding_detail(&binding).sections;
         let access = section(&sections, "Access").expect("an Access section");
         assert_eq!(
             serde_json::to_value(row(access, "Subjects").expect("subjects")).unwrap(),
@@ -7453,7 +7987,7 @@ mod detail_tests {
         }))
         .expect("a Role");
 
-        let sections = role_sections(&role);
+        let sections = role_detail(&role).sections;
         let rules = section(&sections, "Rules").expect("a Rules section");
         assert_eq!(
             serde_json::to_value(row(rules, "Rules").expect("rules")).unwrap(),
@@ -7476,7 +8010,7 @@ mod detail_tests {
         }))
         .expect("a ServiceAccount");
 
-        let sections = service_account_sections(&account);
+        let sections = service_account_detail(&account).sections;
         let references = section(&sections, "References").expect("a References section");
         let DetailRow::Links { links, .. } = row(references, "Pull secrets").expect("pull secrets")
         else {
@@ -7526,7 +8060,7 @@ mod detail_tests {
         }))
         .expect("a Pod");
 
-        let sections = pod_sections(&pod);
+        let sections = pod_detail(&pod).sections;
         assert_eq!(titles(&sections), ["Pod", "Scheduling", "Volumes"]);
         let pod_section = section(&sections, "Pod").expect("a Pod section");
         assert_eq!(
@@ -7578,7 +8112,7 @@ mod detail_tests {
         }))
         .expect("a Deployment");
 
-        let sections = deployment_sections(&deployment);
+        let sections = deployment_detail(&deployment).sections;
         let deployment = section(&sections, "Deployment").expect("a Deployment section");
         assert_eq!(
             serde_json::to_value(row(deployment, "Strategy").expect("a strategy")).unwrap(),
@@ -7587,6 +8121,148 @@ mod detail_tests {
         assert_eq!(
             serde_json::to_value(row(deployment, "Selector").expect("a selector")).unwrap(),
             json!({ "badges": { "label": "Selector", "items": ["app=web"] } })
+        );
+    }
+
+    /// A relation says which query would read it. Deriving that is free, which is
+    /// why it rides along with the rows the watch re-reads on every change.
+    #[test]
+    fn reads_a_service_and_a_node_as_the_pods_they_pick_out() {
+        let service: Service = serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": { "name": "web", "namespace": "team-a" },
+            "spec": { "selector": { "tier": "front", "app": "web" } }
+        }))
+        .expect("a Service");
+        let rows = service_detail(&service);
+        assert_eq!(
+            serde_json::to_value(&rows.relations[0]).unwrap(),
+            json!({
+                "title": "Pods",
+                "kind": "pods",
+                "query": { "labels": { "selector": "app=web,tier=front" } }
+            })
+        );
+
+        let node: Node = serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": "Node",
+            "metadata": { "name": "node-a" }
+        }))
+        .expect("a Node");
+        let rows = node_detail(&node);
+        assert_eq!(
+            serde_json::to_value(&rows.relations[0]).unwrap(),
+            json!({
+                "title": "Pods",
+                "kind": "pods",
+                "query": { "fields": { "selector": "spec.nodeName=node-a" } }
+            })
+        );
+    }
+
+    /// A Deployment points at its pods and at the ReplicaSets that own them.
+    #[test]
+    fn reads_a_deployment_as_pods_and_children() {
+        let deployment: Deployment = serde_json::from_value(json!({
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": { "name": "web", "namespace": "team-a", "uid": "d1" },
+            "spec": { "selector": { "matchLabels": { "app": "web" } } }
+        }))
+        .expect("a Deployment");
+        let rows = deployment_detail(&deployment);
+        let titles: Vec<&str> = rows
+            .relations
+            .iter()
+            .map(|relation| relation.title.as_str())
+            .collect();
+        assert_eq!(titles, ["Pods", "ReplicaSets"]);
+        // Owner references are not selectable, so the query is just the tag.
+        assert_eq!(
+            serde_json::to_value(&rows.relations[1].query).unwrap(),
+            json!("children")
+        );
+    }
+
+    /// A Service with no selector picks out nothing, so it offers nothing.
+    #[test]
+    fn a_relation_with_no_query_is_not_offered() {
+        let service: Service = serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": { "name": "external", "namespace": "team-a" },
+            "spec": { "type": "ExternalName", "externalName": "example.com" }
+        }))
+        .expect("a Service");
+        assert!(service_detail(&service).relations.is_empty());
+    }
+
+    #[test]
+    fn matches_a_child_by_its_owners_uid() {
+        let owned = |uid: &str| OwnerReference {
+            uid: uid.to_string(),
+            ..OwnerReference::default()
+        };
+        assert!(owned_by(&[owned("d1")], "d1"));
+        assert!(!owned_by(&[owned("d1")], "d2"));
+        assert!(!owned_by(&[], "d1"));
+        // An object with no uid matches nothing rather than everything.
+        assert!(!owned_by(&[owned("")], ""));
+    }
+
+    /// A filtered list keeps how many it held, so the panel can say "100 of 312"
+    /// rather than letting the cap read as the whole cluster.
+    #[test]
+    fn caps_a_filtered_list_and_keeps_its_total() {
+        let items: Vec<u32> = (0..312).collect();
+        let (rows, total, truncated) = cap_filtered(items, 100);
+        assert_eq!(rows.len(), 100);
+        assert_eq!(total, Some(312));
+        assert!(truncated);
+
+        // Exactly the cap is not more than the cap.
+        let items: Vec<u32> = (0..100).collect();
+        let (_, total, truncated) = cap_filtered(items, 100);
+        assert_eq!(total, Some(100));
+        assert!(!truncated);
+
+        let items: Vec<u32> = (0..4).collect();
+        let (rows, total, truncated) = cap_filtered(items, 100);
+        assert_eq!(rows.len(), 4);
+        assert_eq!(total, Some(4));
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn reads_an_ingress_as_the_services_its_backends_name() {
+        let ingress: Ingress = serde_json::from_value(json!({
+            "apiVersion": "networking.k8s.io/v1",
+            "kind": "Ingress",
+            "metadata": { "name": "web", "namespace": "team-a" },
+            "spec": {
+                "defaultBackend": { "service": { "name": "fallback", "port": { "number": 80 } } },
+                "rules": [{
+                    "host": "example.com",
+                    "http": { "paths": [
+                        { "path": "/", "pathType": "Prefix",
+                          "backend": { "service": { "name": "web", "port": { "number": 80 } } } },
+                        { "path": "/api", "pathType": "Prefix",
+                          "backend": { "service": { "name": "web", "port": { "number": 8080 } } } }
+                    ] }
+                }]
+            }
+        }))
+        .expect("an Ingress");
+        let rows = ingress_detail(&ingress);
+        assert_eq!(
+            serde_json::to_value(&rows.relations[0]).unwrap(),
+            json!({
+                "title": "Services",
+                "kind": "services",
+                "query": { "names": { "names": ["fallback", "web"] } }
+            })
         );
     }
 }

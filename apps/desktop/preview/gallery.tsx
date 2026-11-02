@@ -13,7 +13,7 @@ import { ArgoScreen, Detail, OverviewScreen, PinnedSplash, ResourceScreen, Searc
 import { DEFAULT_KEYMAP } from "../src/keymap";
 import { DEFAULT_THEME, BUILTIN_THEMES, themeTokens } from "../src/theme";
 import type { Kubi } from "../src/useKubi";
-import type { ClusterOverview, DetailSection, EventInfo, LogSnapshot, ResourceKind, ResourceRow, Tab } from "../src/types";
+import type { ClusterOverview, DetailSection, EventInfo, LogSnapshot, RelatedGroup, ResourceKind, ResourceRow, Tab } from "../src/types";
 
 const row = (
   uid: string,
@@ -430,6 +430,13 @@ const tab = (detailTab: Tab["detailTab"], selected: string | null): Tab =>
     dataFor: null,
     detail: selected == null ? null : sections,
     detailFor: selected,
+    // A pod has no relation lists of its own, so the pod pages show none; the
+    // per-kind pages set these.
+    related: null,
+    relatedFor: null,
+    relatedSpecs: [],
+    relatedAt: 0,
+    relatedExpand: null,
     events: selected == null ? null : events,
     eventsFor: selected,
     sources: null,
@@ -604,13 +611,41 @@ const detail = (detailTab: Tab["detailTab"], width = 460) => {
   return renderToStaticMarkup(<Detail kubi={kubi} width={width} onWidth={noop} />);
 };
 
+/** What a Service's own object points at: a long list, and one it may not read. */
+const relatedGroups: RelatedGroup[] = [
+  { title: "Pods", kind: "pods", total: 312, truncated: true, note: null, rows: rows.slice(0, 5) },
+  {
+    title: "ReplicaSets",
+    kind: "replicaSets",
+    total: 2,
+    truncated: false,
+    note: null,
+    rows: rows.slice(0, 2),
+  },
+  {
+    title: "Services",
+    kind: "services",
+    total: null,
+    truncated: false,
+    note: "listing services is not allowed in this namespace",
+    rows: [],
+  },
+];
+
 /** The panel for another kind: the same shell, that kind's own sections. */
-const detailOf = (resource: ResourceKind, kindSections: DetailSection[], width = 460) => {
+const detailOf = (
+  resource: ResourceKind,
+  kindSections: DetailSection[],
+  related: RelatedGroup[] | null = relatedGroups,
+  width = 460,
+) => {
   const activeTab: Tab = {
     ...tab("overview", "u1"),
     view: { kind: "resource", resource },
     detail: metaSections(kindSections),
     detailFor: "u1",
+    related,
+    relatedFor: related == null ? null : "u1",
   };
   const kubi = kubiFor(activeTab);
   return renderToStaticMarkup(<Detail kubi={kubi} width={width} onWidth={noop} />);

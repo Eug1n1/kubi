@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Kubi } from "./useKubi";
-import type { ArgoApp, CrTarget, DataEntry, DetailRow, DetailSection, EventInfo, ObjectWarning, PodContainer, PodEnv, PodMount, PodSources, ResourceKind, ResourceRow, View, WatchTarget } from "./types";
-import { conditionReason, orderSections, rowCaption, sectionCount, startsFolded } from "./detail";
+import type { ArgoApp, CrTarget, DataEntry, DetailRow, DetailSection, EventInfo, ObjectWarning, PodContainer, PodEnv, PodMount, PodSources, RelatedGroup, ResourceKind, ResourceRow, View, WatchTarget } from "./types";
+import { conditionReason, overviewBlocks, relatedCount, rowCaption, sectionCount, startsFolded } from "./detail";
 import { bindingKeys } from "./keymap";
 import {
   NAV,
@@ -1066,6 +1066,9 @@ export function Detail({ kubi, width, onWidth }: { kubi: Kubi; width: number; on
             containers={tab.containers}
             containersReady={tab.containersFor === tab.selected}
             sections={tab.detailFor === tab.selected ? tab.detail : null}
+            related={tab.relatedFor === tab.selected ? tab.related : null}
+            relatedExpand={tab.relatedExpand}
+            onShowAll={kubi.showAllRelated}
             actions={{
               open: (target, namespace, name) => kubi.openNamed(target, namespace, name, tab.context),
               forward:
@@ -1772,6 +1775,138 @@ function UsageCard({ row }: { row: ResourceRow }) {
   );
 }
 
+/**
+ * The facts the object list already knows, for a kind the engine has no rows for
+ * yet. It reads the same row the list does, so it says exactly what the list says.
+ */
+function FactsCard({ title, facts }: { title: string; facts: Fact[] }) {
+  return (
+    <section className="card">
+      <h2>{title}</h2>
+      {facts.map((fact) =>
+        fact.kind === "text" ? (
+          <Meta key={fact.label} label={fact.label} value={fact.value} />
+        ) : fact.kind === "table" ? (
+          <div key={fact.label} className="fact-block">
+            <p className="muted">{fact.label}</p>
+            <FactTable columns={fact.columns} rows={fact.rows} />
+          </div>
+        ) : (
+          <div key={fact.label} className="fact-block">
+            <p className="muted">{fact.label}</p>
+            <ul className="fact-list">
+              {fact.items.map((item, index) => (
+                <li key={`${item}-${index}`} className="wrap">
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ),
+      )}
+    </section>
+  );
+}
+
+/** The objects the selected one points at, one block per relation. */
+function RelatedBlocks({
+  groups,
+  actions,
+  expanded,
+  onShowAll,
+}: {
+  groups: RelatedGroup[];
+  actions: RowActions;
+  expanded: string | null;
+  onShowAll: (title: string) => void;
+}) {
+  return (
+    <>
+      {groups.map((group) => (
+        <RelatedBlock
+          key={group.title}
+          group={group}
+          actions={actions}
+          expanded={expanded}
+          onShowAll={onShowAll}
+        />
+      ))}
+    </>
+  );
+}
+
+/**
+ * One relation's rows. The columns are the object list's own, so a pod looks like
+ * a pod wherever it appears, and a row opens the object it names.
+ */
+function RelatedBlock({
+  group,
+  actions,
+  expanded,
+  onShowAll,
+}: {
+  group: RelatedGroup;
+  actions: RowActions;
+  expanded: string | null;
+  onShowAll: (title: string) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  const columns = columnsFor({ kind: "resource", resource: group.kind });
+  const count = relatedCount(group);
+  return (
+    <section className="card">
+      <button className="fold" onClick={() => setOpen((value) => !value)}>
+        <i className={open ? "chevron" : "chevron closed"} />
+        <span>{group.title}</span>
+        {count != null ? <span className="muted">{count}</span> : null}
+      </button>
+      {open ? (
+        group.note != null ? (
+          // A relation the cluster would not let us read says so here rather than
+          // failing the whole panel: it is one fact about this object.
+          <p className="muted">{group.note}</p>
+        ) : group.rows.length === 0 ? (
+          <p className="muted">none</p>
+        ) : (
+          <>
+            <div className="table-scroll">
+              <table className="detail-table">
+                <thead>
+                  <tr>
+                    {columns.map((column) => (
+                      <th key={columnKey(column.field)}>{column.title}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {group.rows.map((item) => (
+                    <tr
+                      key={item.uid}
+                      className="clickable"
+                      onClick={() => actions.open({ kind: group.kind }, item.namespace, item.name)}
+                    >
+                      {columns.map((column) => (
+                        <td key={columnKey(column.field)} className="wrap">
+                          {fieldText(item, column.field)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {group.truncated && expanded !== group.title ? (
+              <button className="ghost" onClick={() => onShowAll(group.title)}>
+                {group.total == null ? "Show all" : `Show all ${group.total}`}
+              </button>
+            ) : null}
+          </>
+        )
+      ) : null}
+    </section>
+  );
+}
+
 function OverviewTab({
   row,
   kind,
@@ -1783,6 +1918,9 @@ function OverviewTab({
   containersReady,
   sections,
   actions,
+  related,
+  relatedExpand,
+  onShowAll,
 }: {
   row: ResourceRow;
   kind: ResourceKind | null;
@@ -1794,8 +1932,17 @@ function OverviewTab({
   containersReady: boolean;
   sections: DetailSection[] | null;
   actions: RowActions;
+  /** The relations of the selected object, or null while they are being read. */
+  related: RelatedGroup[] | null;
+  relatedExpand: string | null;
+  onShowAll: (title: string) => void;
 }) {
   const facts = resourceFacts(kind, row);
+  const blocks = overviewBlocks(sections ?? [], {
+    facts: facts.length > 0,
+    related: related != null && related.length > 0,
+    usage: kind === "pods" || kind === "nodes",
+  });
   return (
     <div className="detail-stack">
       {warnings.length > 0 ? (
@@ -1823,38 +1970,29 @@ function OverviewTab({
         {shown(cell(row, "managedBy")) ? <Meta label="Managed by" value={cell(row, "managedBy")} /> : null}
         {shown(row.ready) ? <Meta label="Ready" value={row.ready} /> : null}
       </section>
-      {sections == null ? (
-        <p className="muted">Loading details…</p>
-      ) : (
-        <DetailSections sections={sections} actions={actions} />
-      )}
-      {facts.length > 0 ? (
-        <section className="card">
-          <h2>{title}</h2>
-          {facts.map((fact) =>
-            fact.kind === "text" ? (
-              <Meta key={fact.label} label={fact.label} value={fact.value} />
-            ) : fact.kind === "table" ? (
-              <div key={fact.label} className="fact-block">
-                <p className="muted">{fact.label}</p>
-                <FactTable columns={fact.columns} rows={fact.rows} />
-              </div>
-            ) : (
-              <div key={fact.label} className="fact-block">
-                <p className="muted">{fact.label}</p>
-                <ul className="fact-list">
-                  {fact.items.map((item, index) => (
-                    <li key={`${item}-${index}`} className="wrap">
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ),
-          )}
-        </section>
-      ) : null}
-      {kind === "pods" || kind === "nodes" ? <UsageCard row={row} /> : null}
+      {sections == null ? <p className="muted">Loading details…</p> : null}
+      {blocks.map((block) => {
+        if (block.kind === "section") {
+          return (
+            <DetailSectionCard
+              key={`section:${block.section.title}`}
+              section={block.section}
+              actions={actions}
+            />
+          );
+        }
+        if (block.kind === "facts") return <FactsCard key="facts" title={title} facts={facts} />;
+        if (block.kind === "usage") return <UsageCard key="usage" row={row} />;
+        return (
+          <RelatedBlocks
+            key="related"
+            groups={related ?? []}
+            actions={actions}
+            expanded={relatedExpand}
+            onShowAll={onShowAll}
+          />
+        );
+      })}
       {kind === "pods" ? <ContainersCard ready={containersReady} containers={containers} /> : null}
     </div>
   );
@@ -2068,23 +2206,6 @@ type RowActions = {
   /** Offer a port forward, for the kinds the cluster can forward from. */
   forward?: (port: number) => void;
 };
-
-/** The sections the engine read from the object, in the order the panel shows them. */
-function DetailSections({
-  sections,
-  actions,
-}: {
-  sections: DetailSection[];
-  actions: RowActions;
-}) {
-  return (
-    <>
-      {orderSections(sections).map((section) => (
-        <DetailSectionCard key={section.title} section={section} actions={actions} />
-      ))}
-    </>
-  );
-}
 
 function DetailSectionCard({
   section,
@@ -2344,6 +2465,8 @@ function resourceFacts(kind: ResourceKind | null, row: ResourceRow): Fact[] {
     case "clusterRoles":
     case "roleBindings":
     case "clusterRoleBindings":
+    case "persistentVolumeClaims":
+    case "persistentVolumes":
       return [];
     case "jobs":
       return keep([
@@ -2398,23 +2521,6 @@ function resourceFacts(kind: ResourceKind | null, row: ResourceRow): Fact[] {
         textFact("Type", row.status),
         textFact("Keys", row.ready),
         listFact("Data", cell(row, "keyList"), "\n"),
-      ]);
-    case "persistentVolumeClaims":
-      return keep([
-        textFact("Phase", row.status),
-        textFact("Size", row.ready),
-        textFact("Class", cell(row, "class")),
-        textFact("Volume", cell(row, "volume")),
-        textFact("Access modes", cell(row, "accessModes")),
-      ]);
-    case "persistentVolumes":
-      return keep([
-        textFact("Phase", row.status),
-        textFact("Size", row.ready),
-        textFact("Class", cell(row, "class")),
-        textFact("Reclaim", cell(row, "reclaim")),
-        textFact("Claim", cell(row, "claim")),
-        textFact("Access modes", cell(row, "accessModes")),
       ]);
     case "storageClasses":
       return keep([

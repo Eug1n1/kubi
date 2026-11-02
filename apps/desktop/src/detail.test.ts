@@ -1,37 +1,91 @@
 import { describe, expect, it } from "vitest";
 
-import { conditionReason, orderSections, rowCaption, sectionCount, startsFolded } from "./detail";
-import type { DetailSection } from "./types";
+import { conditionReason, overviewBlocks, relatedCount, rowCaption, sectionCount, startsFolded, type Block } from "./detail";
+import type { DetailSection, RelatedGroup } from "./types";
 
 const section = (title: string): DetailSection => ({ title, rows: [] });
 
-const titles = (sections: DetailSection[]): string[] => sections.map((item) => item.title);
+/** A block as a word, so an expectation reads like the screen. */
+const titles = (blocks: Block[]): string[] =>
+  blocks.map((block) => (block.kind === "section" ? block.section.title : block.kind));
 
-describe("orderSections", () => {
+describe("overviewBlocks", () => {
   it("puts the object and its status above the long metadata lists", () => {
-    const ordered = orderSections([
+    const blocks = overviewBlocks([
       section("Annotations"),
       section("Labels"),
       section("Status"),
       section("Object"),
     ]);
-    expect(titles(ordered)).toEqual(["Object", "Status", "Labels", "Annotations"]);
+    expect(titles(blocks)).toEqual(["Object", "Status", "Labels", "Annotations"]);
   });
 
   it("keeps a kind's own section above the metadata lists", () => {
-    const ordered = orderSections([section("Rules"), section("Labels"), section("Object")]);
-    expect(titles(ordered)).toEqual(["Object", "Rules", "Labels"]);
+    const blocks = overviewBlocks([section("Rules"), section("Labels"), section("Object")]);
+    expect(titles(blocks)).toEqual(["Object", "Rules", "Labels"]);
   });
 
   it("keeps the arrival order of two sections it has never heard of", () => {
-    const ordered = orderSections([section("Rules"), section("Subjects")]);
-    expect(titles(ordered)).toEqual(["Rules", "Subjects"]);
+    const blocks = overviewBlocks([section("Rules"), section("Subjects")]);
+    expect(titles(blocks)).toEqual(["Rules", "Subjects"]);
+  });
+
+  it("puts the row-derived facts with the kind's own rows", () => {
+    const blocks = overviewBlocks([section("Labels"), section("Rules"), section("Object")], {
+      facts: true,
+    });
+    expect(titles(blocks)).toEqual(["Object", "Rules", "facts", "Labels"]);
+  });
+
+  it("puts the objects it points at after its own rows and before the metadata", () => {
+    const blocks = overviewBlocks(
+      [section("Labels"), section("Object"), section("Rules")],
+      { related: true },
+    );
+    expect(titles(blocks)).toEqual(["Object", "Rules", "related", "Labels"]);
+  });
+
+  it("puts usage after the relations, because the object does not carry it", () => {
+    const blocks = overviewBlocks([section("Object"), section("Labels")], {
+      related: true,
+      usage: true,
+    });
+    expect(titles(blocks)).toEqual(["Object", "related", "usage", "Labels"]);
   });
 
   it("leaves the array it was given alone", () => {
     const input = [section("Labels"), section("Object")];
-    orderSections(input);
-    expect(titles(input)).toEqual(["Labels", "Object"]);
+    overviewBlocks(input);
+    expect(input.map((item) => item.title)).toEqual(["Labels", "Object"]);
+  });
+});
+
+describe("relatedCount", () => {
+  const group = (rows: number, truncated: boolean, total: number | null): RelatedGroup => ({
+    title: "Pods",
+    kind: "pods",
+    total,
+    truncated,
+    note: null,
+    rows: Array.from({ length: rows }, (_, index) => ({ uid: String(index) }) as never),
+  });
+
+  it("says how many of how many when the list was cut short", () => {
+    expect(relatedCount(group(100, true, 312))).toBe("100 of 312");
+  });
+
+  it("admits it does not know how many more there are", () => {
+    expect(relatedCount(group(100, true, null))).toBe("100+");
+  });
+
+  it("says just the count when the list is complete", () => {
+    expect(relatedCount(group(4, false, 4))).toBe("4");
+  });
+
+  it("says nothing when the list could not be read at all", () => {
+    // A header claiming "Services 0" above "not allowed" would be saying the
+    // cluster holds none of them.
+    expect(relatedCount({ ...group(0, false, null), note: "not allowed" })).toBeNull();
   });
 });
 

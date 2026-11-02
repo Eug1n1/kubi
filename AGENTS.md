@@ -148,6 +148,13 @@ refresh: a tab coming back to the front registers without reading, which is what
 keeps an unsaved YAML draft. See
 `docs/adr/0003-detail-panel-follows-the-object.md`.
 
+**Related objects are read on demand, never on the watch.** `ObjectDetail` carries
+the relations as *queries* — deriving them is a function of the object, so it is
+free — and the rows behind them come from `FetchRelated`, capped at a hundred and
+answering `Show all` for one relation at a time. The panel owns the refresh
+cadence. A relation the cluster refuses says so inside its own block, never as a
+window banner. See `docs/adr/0004-related-objects-are-listed-by-the-engine.md`.
+
 **A context window is a main-like window pinned to one context.** It renders
 the same `App` with a `pinned` prop, filters broadcast events to its own
 cluster (`eventScope` in `types.ts`), and opens its own dock windows, which
