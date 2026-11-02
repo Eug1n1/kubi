@@ -33,6 +33,12 @@ shipped as.
 
 ### Fixed
 
+- The detail panel follows the object it shows: the Overview facts, the container
+  states and a pod's containers now update as the object changes, instead of
+  freezing at whatever they were when the row was selected. A pod that leaves
+  `Pending` no longer sits on `containerInitializing` until the row is clicked
+  again.
+
 - The namespace menu gives every namespace one shared width, so a short name
   highlights across the whole row. A name that does not fit is cut off, and
   hovering it shows the full name. Text typed to filter the list stays visible
