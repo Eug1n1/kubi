@@ -218,6 +218,9 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
     byUid: {},
   });
   const warningsAt = useRef(0);
+  /** What the engine was last told this window is showing, so a repeated
+   * selection is not re-sent on every row update. */
+  const selectionSent = useRef("");
   const [createOpen, setCreateOpen] = useState(false);
   const [createYaml, setCreateYaml] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
@@ -886,6 +889,45 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
     });
   }
 
+  /**
+   * Keeps the engine's idea of what this window is showing in step with the tab
+   * in front, so the watch that already lists the kind can keep the panel
+   * current. The read is asked for only when the panel has nothing for the row
+   * yet: a tab coming back to the front must not discard a YAML draft.
+   */
+  function syncSelection(index = session.current.active) {
+    if (index == null) return;
+    const tab = session.current.tabs[index];
+    if (!tab) return;
+    const target = watchOf(tab.view);
+    const row = tab.rows.find((item) => item.uid === tab.selected);
+    if (!target || !row) {
+      const key = `none|${tab.context}`;
+      if (key === selectionSent.current) return;
+      selectionSent.current = key;
+      void send({ clearSelection: { window: ownLabel, context: tab.context } });
+      return;
+    }
+    // The reveal flag is part of what the engine has to know, so it is part of
+    // what a repeat is measured against: toggling it must reach the engine even
+    // though the row has not changed.
+    const key = `${tab.context}|${row.uid}|${tab.reveal ? 1 : 0}`;
+    if (key === selectionSent.current) return;
+    selectionSent.current = key;
+    void send({
+      selectObject: {
+        window: ownLabel,
+        context: tab.context,
+        target,
+        namespace: row.namespace,
+        name: row.name,
+        uid: row.uid,
+        reveal: tab.reveal,
+        read: tab.detailFor !== row.uid,
+      },
+    });
+  }
+
   function activate(index: number) {
     const tab = session.current.tabs[index];
     if (!tab) return;
@@ -899,6 +941,9 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
     updateTabs((items) => items.map((item, i) => (i === index ? { ...item, waiting: true } : item)));
     void send({ setNamespace: { context: tab.context, namespace: tab.namespace } });
     void send({ watch: { context: tab.context, target } });
+    // The tab in front is what this window is showing: the engine follows it,
+    // and reads only what the panel does not already have.
+    syncSelection(index);
     if (tab.detailTab === "events") requestEvents(index);
     if (tab.detailTab === "sources") requestSources(index);
   }
@@ -1042,9 +1087,10 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
     );
     if (focusChanged) {
       setHistory([]);
-      requestYaml(index);
+      // One command for the panel's first read: the engine answers with the
+      // YAML, the Overview sections and, for a pod, its containers.
+      syncSelection(index);
       requestEvents(index);
-      if (tab.view.kind === "resource" && tab.view.resource === "pods") requestPodContainers(index);
     }
   }
 
@@ -1251,9 +1297,8 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
       const withUsage = applyUsage(rows, from, session.current.usage);
       const observedAt = Date.now();
       const live = new Set(withUsage.map((row) => row.uid));
-      const refreshYaml: number[] = [];
       updateTabs((items) =>
-        items.map((tab, index) => {
+        items.map((tab) => {
           const watching = watchOf(tab.view);
           // Rows belong to one cluster: a watch in another must not claim them.
           if (!watching || tab.context !== from || !sameTarget(watching, target)) return tab;
@@ -1261,7 +1306,6 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
           const selected = tab.selected != null && live.has(tab.selected) ? tab.selected : (selection[0] ?? null);
           const anchor = tab.anchor != null && live.has(tab.anchor) ? tab.anchor : selected;
           const focusedGone = tab.selected !== selected;
-          if (focusedGone && selected) refreshYaml.push(index);
           return {
             ...tab,
             rows: withUsage,
@@ -1270,11 +1314,26 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
             selection,
             selected,
             anchor,
-            ...(focusedGone ? { yaml: null, yamlFor: null, data: null, dataFor: null } : {}),
+            // A row that took the focus over is read afresh: the panel follows
+            // the object, so it must not inherit what the old one showed.
+            ...(focusedGone
+              ? {
+                  yaml: null,
+                  yamlFor: null,
+                  data: null,
+                  dataFor: null,
+                  detail: null,
+                  detailFor: null,
+                  containers: null,
+                  containersFor: null,
+                }
+              : {}),
           };
         }),
       );
-      for (const index of refreshYaml) requestYaml(index);
+      // The panel of the tab in front follows the object it shows, so a row
+      // that took the focus over is read without waiting for a click.
+      syncSelection();
       selectPending();
       const index = session.current.active;
       const tab = index == null ? undefined : session.current.tabs[index];
@@ -1915,9 +1974,15 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
     clearSelection: () => {
       const index = session.current.active;
       if (index == null) return;
+      const tab = session.current.tabs[index];
       updateTabs((items) =>
         items.map((item, i) => (i === index ? { ...item, selected: null, selection: [], anchor: null } : item)),
       );
+      if (!tab) return;
+      // Closing the panel ends the watch's interest in the object, and with it
+      // the sources it was keeping.
+      selectionSent.current = `none|${tab.context}`;
+      void send({ clearSelection: { window: ownLabel, context: tab.context } });
     },
     setDetailTab: showDetail,
     openLogs: () => {
@@ -2015,13 +2080,26 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
       updateTabs((items) =>
         items.map((item, i) =>
           i === index
-            ? { ...item, reveal, yaml: null, yamlFor: null, data: null, dataFor: null, detail: null, detailFor: null }
+            ? {
+                ...item,
+                reveal,
+                yaml: null,
+                yamlFor: null,
+                data: null,
+                dataFor: null,
+                detail: null,
+                detailFor: null,
+                containers: null,
+                containersFor: null,
+              }
             : item,
         ),
       );
-      requestYaml(index);
+      // The flag rides with the selection, so what the watch rebuilds is masked
+      // the same way the read is. Nulling the panel above is what makes the
+      // re-registration below ask for that read.
+      syncSelection(index);
       if (session.current.tabs[index]?.detailTab === "sources") requestSources(index);
-      if (session.current.tabs[index]?.detailTab === "overview") requestPodContainers(index);
     },
     refresh: () => {
       if (refreshingRef.current) return;
