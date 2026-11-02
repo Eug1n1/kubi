@@ -264,6 +264,25 @@ export type Command =
   | { setNamespace: { context: string; namespace: string | null } }
   | { watch: { context: string; target: WatchTarget } }
   | { stopWatch: { context: string } }
+  | {
+      selectObject: {
+        /**
+         * What this window's detail panel is showing, so the watch that already
+         * lists the kind can keep it current. `read` asks for the one read a
+         * selection needs; a tab coming back to the front passes false, which is
+         * what keeps it from discarding a YAML draft.
+         */
+        window: string;
+        context: string;
+        target: WatchTarget;
+        namespace: string;
+        name: string;
+        uid: string;
+        reveal: boolean;
+        read: boolean;
+      };
+    }
+  | { clearSelection: { window: string; context: string } }
   | { fetchOverview: { context: string } }
   | { fetchEvents: { context: string; namespace: string; name: string; uid: string } }
   | { fetchWarnings: { context: string; namespace: string | null } }

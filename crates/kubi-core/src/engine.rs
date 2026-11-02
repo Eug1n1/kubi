@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -59,13 +59,16 @@ use crate::rows::{
 };
 
 macro_rules! watch_ns {
-    ($context:expr, $client:expr, $namespace:expr, $kind:expr, $ty:ty, $row:path, $cancel:expr, $events:expr) => {
+    ($context:expr, $client:expr, $namespace:expr, $kind:expr, $ty:ty, $row:path, $sections:path, $cancel:expr, $events:expr, $live:expr $(,)?) => {
         spawn_watch(
             namespaced::<$ty>($client, $namespace),
             WatchTarget::Kind($kind),
             $row,
+            $sections,
+            None,
             $cancel,
             $events,
+            $live,
             None,
             $context,
         );
@@ -73,13 +76,16 @@ macro_rules! watch_ns {
 }
 
 macro_rules! watch_cluster {
-    ($context:expr, $client:expr, $kind:expr, $ty:ty, $row:path, $cancel:expr, $events:expr) => {
+    ($context:expr, $client:expr, $kind:expr, $ty:ty, $row:path, $sections:path, $cancel:expr, $events:expr, $live:expr $(,)?) => {
         spawn_watch(
             Api::<$ty>::all($client),
             WatchTarget::Kind($kind),
             $row,
+            $sections,
+            None,
             $cancel,
             $events,
+            $live,
             None,
             $context,
         );
@@ -225,6 +231,9 @@ struct Engine {
     forwards: std::collections::HashMap<u64, LiveStream>,
     execs: std::collections::HashMap<u64, ExecSlot>,
     argo_cache: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, ArgoTargets>>>,
+    /// What each window's detail panel is showing, shared with the watches so a
+    /// change reaches the panel without a second request.
+    live: std::sync::Arc<std::sync::Mutex<Live>>,
 }
 
 /// A stream that outlives the command that started it, with the cluster it
@@ -251,6 +260,80 @@ struct ArgoTargets {
     set: Option<crate::model::CrTarget>,
 }
 
+/// What one window's detail panel is showing. The watch that already lists the
+/// kind reads this, so a change reaches the panel without a second request.
+/// The uid identifies the object — one instance of it, cluster-wide — so the
+/// registration needs nothing else to recognise it.
+#[derive(Clone, Debug)]
+struct Selection {
+    context: String,
+    uid: String,
+    reveal: bool,
+    /// Resource version last sent to the panel. A watch that re-lists repeats
+    /// versions the panel already has, and sending them again is a flicker for
+    /// no new information.
+    version: Option<String>,
+}
+
+/// The ConfigMaps and Secrets a pod refers to, read once and reused while the
+/// pod is selected: a pod's mounts and environment cannot change without a new
+/// uid, so the resolved values stay valid as long as its status changes.
+#[derive(Clone, Default)]
+struct PodSources {
+    config_maps: BTreeMap<String, ConfigMap>,
+    secrets: BTreeMap<String, Secret>,
+}
+
+/// A pod's containers, rebuilt from the object that just changed and the
+/// sources read when it was selected. Only a pod's watch passes one.
+type ContainersOf<K> = fn(&K, &PodSources, bool) -> Vec<PodContainer>;
+
+/// The detail panel's live state, shared with the watches.
+#[derive(Default)]
+struct Live {
+    /// Keyed by window and cluster: two windows browse one cluster at once and
+    /// neither may replace the other's selection.
+    selections: HashMap<(String, String), Selection>,
+    /// Keyed by cluster and uid, so a watch can rebuild a pod's containers.
+    sources: HashMap<(String, String), PodSources>,
+}
+
+impl Live {
+    /// Marks a change as sent to every window showing that object, and answers
+    /// with one of them when it was news to somebody. `None` when nobody shows
+    /// the object, or when the panel already has this version — the rule that
+    /// keeps a watch which re-lists from re-sending. Pure, so the whole decision
+    /// is testable without a cluster.
+    fn claim(&mut self, context: &str, uid: &str, version: Option<&str>) -> Option<Selection> {
+        let mut claimed = None;
+        for selection in self.selections.values_mut() {
+            if selection.context != context || selection.uid != uid {
+                continue;
+            }
+            if version.is_some() && selection.version.as_deref() == version {
+                continue;
+            }
+            selection.version = version.map(str::to_string);
+            if claimed.is_none() {
+                claimed = Some(selection.clone());
+            }
+        }
+        claimed
+    }
+
+    /// Drops the sources of pods no window is looking at any more. The cache
+    /// holds resolved Secret values, so it lives exactly as long as a selection
+    /// needs it rather than until the process exits.
+    fn forget_unreferenced(&mut self) {
+        let wanted: BTreeSet<(String, String)> = self
+            .selections
+            .values()
+            .map(|selection| (selection.context.clone(), selection.uid.clone()))
+            .collect();
+        self.sources.retain(|key, _| wanted.contains(key));
+    }
+}
+
 impl Engine {
     fn new(events: std::sync::mpsc::Sender<AppEvent>) -> Self {
         Self {
@@ -267,6 +350,7 @@ impl Engine {
             argo_cache: std::sync::Arc::new(
                 std::sync::Mutex::new(std::collections::HashMap::new()),
             ),
+            live: std::sync::Arc::new(std::sync::Mutex::new(Live::default())),
         }
     }
 
@@ -295,6 +379,17 @@ impl Engine {
                 WatchTarget::Custom(target) => self.start_custom_watch(context, target),
             },
             Command::StopWatch { context } => self.stop_watch(&context),
+            Command::SelectObject {
+                window,
+                context,
+                target,
+                namespace,
+                name,
+                uid,
+                reveal,
+                read,
+            } => self.select_object(window, context, target, namespace, name, uid, reveal, read),
+            Command::ClearSelection { window, context } => self.clear_selection(&window, &context),
             Command::FetchYaml {
                 context,
                 target,
@@ -484,8 +579,11 @@ impl Engine {
                     namespaced::<Pod>(client.clone(), &namespace),
                     WatchTarget::Kind(kind),
                     pod_row,
+                    pod_sections,
+                    Some(pod_containers_live),
                     cancel.clone(),
                     events.clone(),
+                    self.live.clone(),
                     None,
                     context.clone(),
                 );
@@ -504,8 +602,11 @@ impl Engine {
                     Api::<Node>::all(client.clone()),
                     WatchTarget::Kind(kind),
                     node_row,
+                    node_sections,
+                    None,
                     cancel.clone(),
                     events.clone(),
+                    self.live.clone(),
                     None,
                     context.clone(),
                 );
@@ -525,8 +626,10 @@ impl Engine {
                     kind,
                     Event,
                     event_row,
+                    no_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::Deployments => {
@@ -537,8 +640,10 @@ impl Engine {
                     kind,
                     Deployment,
                     deployment_row,
+                    deployment_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::ReplicaSets => {
@@ -549,8 +654,10 @@ impl Engine {
                     kind,
                     ReplicaSet,
                     replicaset_row,
+                    replica_set_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::StatefulSets => {
@@ -561,8 +668,10 @@ impl Engine {
                     kind,
                     StatefulSet,
                     statefulset_row,
+                    stateful_set_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::DaemonSets => {
@@ -573,8 +682,10 @@ impl Engine {
                     kind,
                     DaemonSet,
                     daemonset_row,
+                    daemon_set_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::Jobs => {
@@ -585,8 +696,10 @@ impl Engine {
                     kind,
                     Job,
                     job_row,
+                    no_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::CronJobs => {
@@ -597,8 +710,10 @@ impl Engine {
                     kind,
                     CronJob,
                     cronjob_row,
+                    no_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::Services => {
@@ -609,8 +724,10 @@ impl Engine {
                     kind,
                     Service,
                     service_row,
+                    service_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::Endpoints => {
@@ -621,8 +738,10 @@ impl Engine {
                     kind,
                     Endpoints,
                     endpoints_row,
+                    no_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::EndpointSlices => {
@@ -633,8 +752,10 @@ impl Engine {
                     kind,
                     EndpointSlice,
                     endpointslice_row,
+                    no_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::Ingresses => {
@@ -645,8 +766,10 @@ impl Engine {
                     kind,
                     Ingress,
                     ingress_row,
+                    no_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::NetworkPolicies => {
@@ -657,8 +780,10 @@ impl Engine {
                     kind,
                     NetworkPolicy,
                     networkpolicy_row,
+                    no_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::ConfigMaps => {
@@ -669,8 +794,10 @@ impl Engine {
                     kind,
                     ConfigMap,
                     configmap_row,
+                    no_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::Secrets => {
@@ -681,8 +808,10 @@ impl Engine {
                     kind,
                     Secret,
                     secret_row,
+                    no_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::ResourceQuotas => {
@@ -693,8 +822,10 @@ impl Engine {
                     kind,
                     ResourceQuota,
                     resourcequota_row,
+                    no_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::LimitRanges => {
@@ -705,8 +836,10 @@ impl Engine {
                     kind,
                     LimitRange,
                     limitrange_row,
+                    no_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::HorizontalPodAutoscalers => {
@@ -717,8 +850,10 @@ impl Engine {
                     kind,
                     HorizontalPodAutoscaler,
                     hpa_row,
+                    no_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::PodDisruptionBudgets => {
@@ -729,8 +864,10 @@ impl Engine {
                     kind,
                     PodDisruptionBudget,
                     pdb_row,
+                    no_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::PersistentVolumeClaims => {
@@ -741,8 +878,10 @@ impl Engine {
                     kind,
                     PersistentVolumeClaim,
                     pvc_row,
+                    no_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::ServiceAccounts => {
@@ -753,8 +892,10 @@ impl Engine {
                     kind,
                     ServiceAccount,
                     serviceaccount_row,
+                    service_account_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::Roles => {
@@ -765,8 +906,10 @@ impl Engine {
                     kind,
                     Role,
                     role_row,
+                    role_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::RoleBindings => {
@@ -777,8 +920,10 @@ impl Engine {
                     kind,
                     RoleBinding,
                     rolebinding_row,
+                    role_binding_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::Namespaces => {
@@ -788,8 +933,10 @@ impl Engine {
                     kind,
                     Namespace,
                     namespace_row,
+                    no_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::IngressClasses => {
@@ -799,8 +946,10 @@ impl Engine {
                     kind,
                     IngressClass,
                     ingressclass_row,
+                    no_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::PersistentVolumes => {
@@ -810,8 +959,10 @@ impl Engine {
                     kind,
                     PersistentVolume,
                     pv_row,
+                    no_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::StorageClasses => {
@@ -821,8 +972,10 @@ impl Engine {
                     kind,
                     StorageClass,
                     storageclass_row,
+                    no_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::ClusterRoles => {
@@ -832,8 +985,10 @@ impl Engine {
                     kind,
                     ClusterRole,
                     clusterrole_row,
+                    cluster_role_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::ClusterRoleBindings => {
@@ -843,8 +998,10 @@ impl Engine {
                     kind,
                     ClusterRoleBinding,
                     clusterrolebinding_row,
+                    cluster_role_binding_sections,
                     cancel,
-                    events
+                    events,
+                    self.live.clone(),
                 );
             }
             ResourceKind::CustomResourceDefinitions => {
@@ -852,8 +1009,11 @@ impl Engine {
                     Api::<CustomResourceDefinition>::all(client),
                     WatchTarget::Kind(kind),
                     crd_row,
+                    no_sections,
+                    None,
                     cancel,
                     events,
+                    self.live.clone(),
                     Some(5),
                     context.clone(),
                 );
@@ -874,8 +1034,11 @@ impl Engine {
                     api,
                     WatchTarget::Kind(kind),
                     dynamic_row,
+                    no_sections,
+                    None,
                     cancel,
                     events,
+                    self.live.clone(),
                     None,
                     context.clone(),
                 );
@@ -897,8 +1060,11 @@ impl Engine {
             api,
             WatchTarget::Custom(target),
             dynamic_row,
+            no_sections,
+            None,
             cancel,
             self.events.clone(),
+            self.live.clone(),
             None,
             context,
         );
@@ -1237,6 +1403,72 @@ impl Engine {
         });
     }
 
+    /// Registers what a window's detail panel is showing, and reads the object
+    /// once when the panel has nothing for it yet.
+    #[allow(clippy::too_many_arguments)]
+    fn select_object(
+        &self,
+        window: String,
+        context: String,
+        target: WatchTarget,
+        namespace: String,
+        name: String,
+        uid: String,
+        reveal: bool,
+        read: bool,
+    ) {
+        {
+            let mut live = self.live.lock().expect("live state");
+            live.selections.insert(
+                (window, context.clone()),
+                Selection {
+                    context: context.clone(),
+                    uid: uid.clone(),
+                    reveal,
+                    version: None,
+                },
+            );
+            live.forget_unreferenced();
+        }
+        if !read {
+            // A pod's containers are rebuilt by the watch from the sources read
+            // when it was selected. A tab that comes back to the front still has
+            // its containers on screen, but the sources left with the selection
+            // that replaced it, so they are read again — the card would
+            // otherwise stop following the pod for good.
+            if target == WatchTarget::Kind(ResourceKind::Pods)
+                && !self.knows_sources(&context, &uid)
+            {
+                self.spawn_pod_containers(context, namespace, name, uid, reveal);
+            }
+            return;
+        }
+        // A pod's YAML, sections, containers and sources all come from one read
+        // of it, so selecting one costs one request rather than three.
+        if target == WatchTarget::Kind(ResourceKind::Pods) {
+            self.spawn_pod_detail(context, namespace, name, uid, reveal);
+        } else {
+            self.spawn_fetch(context, target, namespace, name, uid, reveal);
+        }
+    }
+
+    fn clear_selection(&self, window: &str, context: &str) {
+        let mut live = self.live.lock().expect("live state");
+        live.selections
+            .remove(&(window.to_string(), context.to_string()));
+        live.forget_unreferenced();
+    }
+
+    /// Whether the sources a selected pod's containers are rebuilt from are
+    /// already cached.
+    fn knows_sources(&self, context: &str, uid: &str) -> bool {
+        self.live
+            .lock()
+            .expect("live state")
+            .sources
+            .contains_key(&(context.to_string(), uid.to_string()))
+    }
+
     fn spawn_fetch(
         &self,
         context: String,
@@ -1331,9 +1563,17 @@ impl Engine {
             return;
         };
         let events = self.events.clone();
+        let live = self.live.clone();
         tokio::spawn(async move {
             match load_pod_containers(&client, &namespace, &name, reveal).await {
-                Ok(containers) => {
+                Ok((containers, sources)) => {
+                    {
+                        let mut state = live.lock().expect("live state");
+                        state
+                            .sources
+                            .insert((context.clone(), uid.clone()), sources);
+                        state.forget_unreferenced();
+                    }
                     let _ = events.send(AppEvent::PodContainers {
                         context,
                         uid,
@@ -1342,6 +1582,55 @@ impl Engine {
                 }
                 Err(err) => {
                     let _ = events.send(AppEvent::Error(format!("containers {name}: {err}")));
+                }
+            }
+        });
+    }
+
+    /// One read of a pod for the whole panel: its YAML, its sections, the state
+    /// of every container and the sources those containers resolved to, which
+    /// the watch then reuses while the pod stays selected.
+    fn spawn_pod_detail(
+        &self,
+        context: String,
+        namespace: String,
+        name: String,
+        uid: String,
+        reveal: bool,
+    ) {
+        let Some(client) = self.require_client(&context) else {
+            return;
+        };
+        let events = self.events.clone();
+        let live = self.live.clone();
+        tokio::spawn(async move {
+            match load_pod_detail(&client, &namespace, &name, reveal).await {
+                Ok(detail) => {
+                    {
+                        let mut state = live.lock().expect("live state");
+                        state
+                            .sources
+                            .insert((context.clone(), uid.clone()), detail.sources);
+                        state.forget_unreferenced();
+                    }
+                    let _ = events.send(AppEvent::Yaml {
+                        context: context.clone(),
+                        uid: uid.clone(),
+                        yaml: detail.yaml,
+                    });
+                    let _ = events.send(AppEvent::ObjectDetail {
+                        context: context.clone(),
+                        uid: uid.clone(),
+                        sections: detail.sections,
+                    });
+                    let _ = events.send(AppEvent::PodContainers {
+                        context,
+                        uid,
+                        containers: detail.containers,
+                    });
+                }
+                Err(err) => {
+                    let _ = events.send(AppEvent::Error(format!("pod {name}: {err}")));
                 }
             }
         });
@@ -1409,16 +1698,98 @@ where
     }
 }
 
+/// A kind whose panel part is entirely generic: nothing is added on top of the
+/// sections every object gets.
+fn no_sections<K>(_: &K) -> Vec<DetailSection> {
+    Vec::new()
+}
+
+/// A pod's containers as the watch rebuilds them: the states come from the
+/// object that just changed, the environment and mounts from the sources read
+/// when the pod was selected.
+fn pod_containers_live(pod: &Pod, sources: &PodSources, reveal: bool) -> Vec<PodContainer> {
+    pod_containers(pod, &sources.config_maps, &sources.secrets, reveal)
+}
+
+/// The selection a change of this object belongs to, when the panel is behind
+/// the object. `None` when no window shows it or it already has this version.
+fn due_selection<K>(
+    live: &std::sync::Arc<std::sync::Mutex<Live>>,
+    context: &str,
+    object: &K,
+) -> Option<Selection>
+where
+    K: Resource,
+{
+    let uid = object.meta().uid.clone()?;
+    let version = object.meta().resource_version.clone();
+    live.lock()
+        .expect("live state")
+        .claim(context, &uid, version.as_deref())
+}
+
+/// Sends the panel the part of an object a watch change just made current. The
+/// sections are read off the object the watch already holds, so keeping the
+/// panel live costs no request of its own.
+fn emit_detail<K>(
+    events: &std::sync::mpsc::Sender<AppEvent>,
+    live: &std::sync::Arc<std::sync::Mutex<Live>>,
+    context: &str,
+    object: &K,
+    selection: &Selection,
+    to_sections: fn(&K) -> Vec<DetailSection>,
+    to_containers: Option<ContainersOf<K>>,
+) where
+    K: Serialize,
+{
+    let Ok(value) = serde_json::to_value(object) else {
+        return;
+    };
+    let mut sections = object_sections(&value, now_secs());
+    sections.extend(to_sections(object));
+    let _ = events.send(AppEvent::ObjectDetail {
+        context: context.to_string(),
+        uid: selection.uid.clone(),
+        sections,
+    });
+    let Some(to_containers) = to_containers else {
+        return;
+    };
+    // The sources were read when the pod was selected. Without them the env and
+    // mounts would arrive blank, so the panel keeps the containers it already
+    // has rather than losing them.
+    let sources = live
+        .lock()
+        .expect("live state")
+        .sources
+        .get(&(context.to_string(), selection.uid.clone()))
+        .cloned();
+    let Some(sources) = sources else {
+        return;
+    };
+    let _ = events.send(AppEvent::PodContainers {
+        context: context.to_string(),
+        uid: selection.uid.clone(),
+        containers: to_containers(object, &sources, selection.reveal),
+    });
+}
+
+// The watch takes one kind's worth of hooks as arguments, matching how the
+// dispatch match and the watch macros hand them over.
+#[allow(clippy::too_many_arguments)]
 fn spawn_watch<K>(
     api: Api<K>,
     target: WatchTarget,
     to_row: fn(&K) -> crate::model::ResourceRow,
+    to_sections: fn(&K) -> Vec<DetailSection>,
+    to_containers: Option<ContainersOf<K>>,
     cancel: CancellationToken,
     events: std::sync::mpsc::Sender<AppEvent>,
+    live: std::sync::Arc<std::sync::Mutex<Live>>,
     page_size: Option<u32>,
     context: String,
 ) where
-    K: Resource + Clone + DeserializeOwned + std::fmt::Debug + Send + Sync + 'static,
+    K: Resource + Clone + DeserializeOwned + Serialize + std::fmt::Debug + Send + Sync + 'static,
 {
     tokio::spawn(async move {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1446,6 +1817,22 @@ fn spawn_watch<K>(
             }
         });
 
+        // A change the panel is waiting for: its sections are read off the
+        // object the watch has just received, so no request is made for them.
+        let notify = |object: &K| {
+            if let Some(selection) = due_selection(&live, &context, object) {
+                emit_detail(
+                    &events,
+                    &live,
+                    &context,
+                    object,
+                    &selection,
+                    to_sections,
+                    to_containers,
+                );
+            }
+        };
+
         let mut rows = Vec::new();
         let mut dirty = false;
         let mut deadline = tokio::time::Instant::now();
@@ -1460,13 +1847,19 @@ fn spawn_watch<K>(
                     let Some(item) = item else { break };
                     match item {
                         Ok(WatchEvent::Init) => rows.clear(),
-                        Ok(WatchEvent::InitApply(object)) => rows.push(to_row(&object)),
+                        Ok(WatchEvent::InitApply(object)) => {
+                            rows.push(to_row(&object));
+                            notify(&object);
+                        }
                         Ok(WatchEvent::InitDone) => {
                             publish(&events, &context, &target, &rows);
                             dirty = false;
                         }
                         Ok(WatchEvent::Apply(object)) => {
                             let row = to_row(&object);
+                            // The panel follows the object, not the debounced
+                            // list, so it is never behind what the cluster says.
+                            notify(&object);
                             if let Some(slot) = rows.iter_mut().find(|existing| existing.uid == row.uid) {
                                 *slot = row;
                             } else {
@@ -3883,13 +4276,57 @@ async fn load_pod_containers(
     namespace: &str,
     name: &str,
     reveal: bool,
-) -> Result<Vec<PodContainer>, String> {
+) -> Result<(Vec<PodContainer>, PodSources), String> {
     let pod = Api::<Pod>::namespaced(client.clone(), namespace)
         .get(name)
         .await
         .map_err(|err| err.to_string())?;
     let (config_maps, secrets) = load_referenced(client, namespace, &pod).await;
-    Ok(pod_containers(&pod, &config_maps, &secrets, reveal))
+    let containers = pod_containers(&pod, &config_maps, &secrets, reveal);
+    Ok((
+        containers,
+        PodSources {
+            config_maps,
+            secrets,
+        },
+    ))
+}
+
+/// A pod's panel in full, from a single read of it: the YAML and the sections
+/// every kind gets, plus the containers of that same object and the sources
+/// they resolved to, which the watch reuses instead of reading again.
+async fn load_pod_detail(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+    reveal: bool,
+) -> Result<PodDetail, String> {
+    let pod = Api::<Pod>::namespaced(client.clone(), namespace)
+        .get(name)
+        .await
+        .map_err(|err| err.to_string())?;
+    let value = serde_json::to_value(&pod).map_err(|err| err.to_string())?;
+    let yaml = yaml::object_to_yaml(value.clone(), "v1", "Pod", false)?;
+    let (config_maps, secrets) = load_referenced(client, namespace, &pod).await;
+    let mut sections = object_sections(&value, now_secs());
+    sections.extend(pod_sections(&pod));
+    Ok(PodDetail {
+        yaml,
+        sections,
+        containers: pod_containers(&pod, &config_maps, &secrets, reveal),
+        sources: PodSources {
+            config_maps,
+            secrets,
+        },
+    })
+}
+
+/// Everything the panel shows about one pod, read together.
+struct PodDetail {
+    yaml: String,
+    sections: Vec<DetailSection>,
+    containers: Vec<PodContainer>,
+    sources: PodSources,
 }
 
 /// Reads the ConfigMaps and Secrets a pod refers to. Unreadable objects are
@@ -6102,6 +6539,7 @@ mod container_tests {
         VolumeMount,
     };
     use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
+    use k8s_openapi::ByteString;
 
     fn quantities(items: &[(&str, &str)]) -> BTreeMap<String, Quantity> {
         items
@@ -6288,6 +6726,142 @@ mod container_tests {
             "Terminated: Error (exit 1)"
         );
     }
+
+    /// The watch rebuilds a pod's containers from the object that just changed
+    /// plus the sources cached when the pod was selected, so a state change
+    /// keeps the resolved environment without reading the cluster again.
+    #[test]
+    fn rebuilds_containers_from_the_cached_sources() {
+        let pod = Pod {
+            spec: Some(PodSpec {
+                containers: vec![Container {
+                    name: "app".to_string(),
+                    env: Some(vec![EnvVar {
+                        name: "DB_PASSWORD".to_string(),
+                        value_from: Some(EnvVarSource {
+                            secret_key_ref: Some(SecretKeySelector {
+                                name: "db".to_string(),
+                                key: "password".to_string(),
+                                ..SecretKeySelector::default()
+                            }),
+                            ..EnvVarSource::default()
+                        }),
+                        ..EnvVar::default()
+                    }]),
+                    ..Container::default()
+                }],
+                ..PodSpec::default()
+            }),
+            ..Pod::default()
+        };
+        let sources = PodSources {
+            config_maps: BTreeMap::new(),
+            secrets: BTreeMap::from([(
+                "db".to_string(),
+                Secret {
+                    data: Some(BTreeMap::from([(
+                        "password".to_string(),
+                        ByteString(b"s3cr3t".to_vec()),
+                    )])),
+                    ..Secret::default()
+                },
+            )]),
+        };
+        let masked = pod_containers_live(&pod, &sources, false);
+        // The value travels and the flag hides it, exactly as a fresh read does.
+        assert_eq!(masked[0].env[0].value, "s3cr3t");
+        assert_eq!(masked[0].env[0].origin, "secret db");
+        assert!(masked[0].env[0].masked);
+        assert!(!pod_containers_live(&pod, &sources, true)[0].env[0].masked);
+    }
+}
+
+/// The rule that keeps the panel current: a change of a selected object reaches
+/// the panel once per version, and only for the cluster that selected it.
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    fn selection(window: &str, context: &str, uid: &str) -> ((String, String), Selection) {
+        (
+            (window.to_string(), context.to_string()),
+            Selection {
+                context: context.to_string(),
+                uid: uid.into(),
+                reveal: false,
+                version: None,
+            },
+        )
+    }
+
+    fn live(items: Vec<((String, String), Selection)>) -> Live {
+        Live {
+            selections: items.into_iter().collect(),
+            ..Live::default()
+        }
+    }
+
+    #[test]
+    fn a_change_is_claimed_once_per_version() {
+        let mut live = live(vec![selection("main", "dev", "1")]);
+        assert!(live.claim("dev", "1", Some("5")).is_some());
+        // The same version again — a watch that re-listed — is not news.
+        assert!(live.claim("dev", "1", Some("5")).is_none());
+        assert!(live.claim("dev", "1", Some("6")).is_some());
+    }
+
+    #[test]
+    fn another_object_or_cluster_is_never_claimed() {
+        let mut live = live(vec![selection("main", "dev", "1")]);
+        assert!(live.claim("dev", "2", Some("5")).is_none());
+        assert!(live.claim("prod", "1", Some("5")).is_none());
+    }
+
+    /// An object the API server gives no version for is never deduplicated away.
+    #[test]
+    fn an_object_without_a_version_is_always_claimed() {
+        let mut live = live(vec![selection("main", "dev", "1")]);
+        assert!(live.claim("dev", "1", None).is_some());
+        assert!(live.claim("dev", "1", None).is_some());
+    }
+
+    /// Two windows on one cluster both show the object, and one window looking
+    /// at something else does not stop the other from being served.
+    #[test]
+    fn every_window_showing_the_object_is_marked_sent() {
+        let mut live = live(vec![
+            selection("main", "dev", "1"),
+            selection("ctx-prod", "dev", "1"),
+            selection("main", "prod", "9"),
+        ]);
+        assert!(live.claim("dev", "1", Some("5")).is_some());
+        let sent: Vec<_> = live
+            .selections
+            .values()
+            .filter(|item| item.uid == "1")
+            .map(|item| item.version.clone())
+            .collect();
+        assert_eq!(sent, vec![Some("5".to_string()), Some("5".to_string())]);
+        assert!(live.claim("dev", "1", Some("5")).is_none());
+    }
+
+    /// The sources hold resolved Secret values, so they go as soon as nothing
+    /// is showing the pod they belong to.
+    #[test]
+    fn sources_of_a_pod_nobody_shows_are_dropped() {
+        let mut live = live(vec![selection("main", "dev", "1")]);
+        live.sources
+            .insert(("dev".into(), "1".into()), PodSources::default());
+        live.sources
+            .insert(("dev".into(), "2".into()), PodSources::default());
+        live.forget_unreferenced();
+        assert!(live
+            .sources
+            .contains_key(&("dev".to_string(), "1".to_string())));
+        assert!(!live
+            .sources
+            .contains_key(&("dev".to_string(), "2".to_string())));
+    }
 }
 
 /// One window can hold several clusters at once, so the engine keeps its state
@@ -6299,6 +6873,62 @@ mod session_tests {
     fn engine() -> (Engine, std::sync::mpsc::Receiver<AppEvent>) {
         let (tx, rx) = std::sync::mpsc::channel();
         (Engine::new(tx), rx)
+    }
+
+    /// A selection that asks for no read, so the bookkeeping needs no cluster.
+    fn selected(window: &str, context: &str, uid: &str) -> Command {
+        Command::SelectObject {
+            window: window.into(),
+            context: context.into(),
+            target: WatchTarget::Kind(ResourceKind::Pods),
+            namespace: "default".into(),
+            name: "app".into(),
+            uid: uid.into(),
+            reveal: false,
+            read: false,
+        }
+    }
+
+    fn uid_of(live: &Live, window: &str) -> Option<String> {
+        live.selections
+            .get(&(window.to_string(), "dev".to_string()))
+            .map(|selection| selection.uid.clone())
+    }
+
+    /// Two windows browse one cluster at once, so the second selection must not
+    /// take over the first window's panel.
+    #[tokio::test]
+    async fn one_window_does_not_replace_another_selection() {
+        let (mut engine, _rx) = engine();
+        engine.handle(selected("main", "dev", "1")).await;
+        engine.handle(selected("ctx-prod", "dev", "2")).await;
+        let live = engine.live.lock().unwrap();
+        assert_eq!(live.selections.len(), 2);
+        assert_eq!(uid_of(&live, "main"), Some("1".to_string()));
+        assert_eq!(uid_of(&live, "ctx-prod"), Some("2".to_string()));
+    }
+
+    /// The cache holds resolved Secret values, so closing the panel takes them
+    /// with it.
+    #[tokio::test]
+    async fn clearing_a_selection_drops_the_sources_it_held() {
+        let (mut engine, _rx) = engine();
+        engine.handle(selected("main", "dev", "1")).await;
+        engine
+            .live
+            .lock()
+            .unwrap()
+            .sources
+            .insert(("dev".into(), "1".into()), PodSources::default());
+        engine
+            .handle(Command::ClearSelection {
+                window: "main".into(),
+                context: "dev".into(),
+            })
+            .await;
+        let live = engine.live.lock().unwrap();
+        assert!(live.selections.is_empty());
+        assert!(live.sources.is_empty());
     }
 
     #[tokio::test]

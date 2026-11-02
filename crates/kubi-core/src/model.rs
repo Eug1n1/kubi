@@ -598,6 +598,28 @@ pub enum Command {
     StopWatch {
         context: String,
     },
+    /// What one window's detail panel is showing, so the watch that already
+    /// lists the kind can keep it current without a second read.
+    SelectObject {
+        /// Label of the window that made the selection: two windows browse one
+        /// cluster at once and neither may replace the other's selection.
+        window: String,
+        context: String,
+        target: WatchTarget,
+        namespace: String,
+        name: String,
+        uid: String,
+        reveal: bool,
+        /// Read the object once now, for a selection whose panel is still
+        /// empty. A tab coming back to the front asks for the registration
+        /// only, which is what keeps it from discarding a YAML draft.
+        read: bool,
+    },
+    /// The panel was closed: this window is showing nothing in that cluster.
+    ClearSelection {
+        window: String,
+        context: String,
+    },
     FetchYaml {
         context: String,
         target: WatchTarget,
@@ -941,6 +963,28 @@ mod serde_tests {
             })
             .unwrap()["fetchPodContainers"]["reveal"],
             true
+        );
+        assert_eq!(
+            serde_json::to_value(Command::SelectObject {
+                window: "main".into(),
+                context: "dev".into(),
+                target: WatchTarget::Kind(ResourceKind::Pods),
+                namespace: "default".into(),
+                name: "app".into(),
+                uid: "1".into(),
+                reveal: false,
+                read: true,
+            })
+            .unwrap()["selectObject"]["read"],
+            true
+        );
+        assert_eq!(
+            serde_json::to_value(Command::ClearSelection {
+                window: "main".into(),
+                context: "dev".into(),
+            })
+            .unwrap()["clearSelection"]["window"],
+            "main"
         );
         let containers = AppEvent::PodContainers {
             context: "dev".into(),
