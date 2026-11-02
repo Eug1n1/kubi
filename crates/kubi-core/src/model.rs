@@ -416,6 +416,134 @@ pub struct DataEntry {
     pub binary: bool,
 }
 
+/// One block of the detail panel's Overview tab. The engine decides what is in
+/// it; the front end decides where it sits, so a section can arrive without a
+/// layout change on the other side.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetailSection {
+    pub title: String,
+    pub rows: Vec<DetailRow>,
+}
+
+/// A row of a section. The variant says how to read the fields, so the front
+/// end renders what the engine measured instead of deriving it from the object
+/// a second time — the panel and the YAML tab cannot disagree about an object
+/// this way.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum DetailRow {
+    Text {
+        label: String,
+        value: String,
+    },
+    List {
+        label: String,
+        items: Vec<String>,
+    },
+    /// Short values that read as chips rather than as a bulleted list: a
+    /// selector, a set of addresses.
+    Badges {
+        label: String,
+        items: Vec<String>,
+    },
+    Table {
+        label: String,
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
+    /// Ports the panel offers to forward. The number and protocol travel with
+    /// the label because only the front end knows whether a forward is possible.
+    Ports {
+        label: String,
+        ports: Vec<DetailPort>,
+    },
+    Links {
+        label: String,
+        links: Vec<DetailLink>,
+    },
+    Conditions {
+        label: String,
+        conditions: Vec<DetailCondition>,
+    },
+}
+
+/// One port a Service exposes, as the panel needs it to offer a forward.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetailPort {
+    pub label: String,
+    pub port: u16,
+    pub proto: String,
+}
+
+/// How a relation's rows are found. A relation carries the query rather than the
+/// rows, so the panel can tell a relation it has already read from one whose
+/// query has just changed, and so a refresh costs a request only when there is
+/// something new to ask.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum RelationQuery {
+    /// A label selector, as the API server takes it.
+    Labels { selector: String },
+    /// A field selector.
+    Fields { selector: String },
+    /// The objects this one names.
+    Names { names: Vec<String> },
+    /// The objects whose owner references name this one.
+    Children,
+}
+
+/// A list the panel can ask for: what to call it, what kind it holds, and how to
+/// find it.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelationSpec {
+    pub title: String,
+    pub kind: ResourceKind,
+    pub query: RelationQuery,
+}
+
+/// One relation's rows, with what the panel needs to say how complete they are.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelatedGroup {
+    pub title: String,
+    pub kind: ResourceKind,
+    /// How many the cluster holds, when the API server would say.
+    pub total: Option<i64>,
+    /// True when the cap cut the list short, so the panel can offer the rest.
+    pub truncated: bool,
+    /// Why there are no rows, when the list could not be read at all.
+    pub note: Option<String>,
+    pub rows: Vec<ResourceRow>,
+}
+
+/// Somewhere the object points at. `target` is absent when the engine cannot
+/// name a view for it — an owner reference to a custom kind carries no plural —
+/// and the front end then shows the name as plain text.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetailLink {
+    pub label: String,
+    pub namespace: String,
+    pub name: String,
+    pub target: Option<WatchTarget>,
+}
+
+/// One entry of `status.conditions`, reduced to what a row can show. `name` is
+/// the condition type (`Ready`); `type` is taken by the Kubernetes field.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetailCondition {
+    pub name: String,
+    pub status: String,
+    pub tone: StatusTone,
+    pub reason: String,
+    pub message: String,
+    pub since_secs: Option<i64>,
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClusterOverview {
@@ -512,6 +640,28 @@ pub enum Command {
     StopWatch {
         context: String,
     },
+    /// What one window's detail panel is showing, so the watch that already
+    /// lists the kind can keep it current without a second read.
+    SelectObject {
+        /// Label of the window that made the selection: two windows browse one
+        /// cluster at once and neither may replace the other's selection.
+        window: String,
+        context: String,
+        target: WatchTarget,
+        namespace: String,
+        name: String,
+        uid: String,
+        reveal: bool,
+        /// Read the object once now, for a selection whose panel is still
+        /// empty. A tab coming back to the front asks for the registration
+        /// only, which is what keeps it from discarding a YAML draft.
+        read: bool,
+    },
+    /// The panel was closed: this window is showing nothing in that cluster.
+    ClearSelection {
+        window: String,
+        context: String,
+    },
     FetchYaml {
         context: String,
         target: WatchTarget,
@@ -519,6 +669,17 @@ pub enum Command {
         name: String,
         uid: String,
         reveal_secrets: bool,
+    },
+    /// The rows behind an object's relations. The panel sends back the queries it
+    /// was handed with the object, so the engine resolves exactly what the panel
+    /// is showing and needs no state of its own to do it.
+    FetchRelated {
+        context: String,
+        namespace: String,
+        uid: String,
+        relations: Vec<RelationSpec>,
+        /// The one relation to return in full rather than up to the cap.
+        expand: Option<String>,
     },
     FetchOverview {
         context: String,
@@ -666,6 +827,23 @@ pub enum AppEvent {
         context: String,
         uid: String,
         entries: Vec<DataEntry>,
+    },
+    /// The Overview tab's sections, built from the same object the YAML came
+    /// from, and the queries its relations would be read by. Sent together with
+    /// `Yaml`, so selecting a row costs one read.
+    ObjectDetail {
+        context: String,
+        uid: String,
+        sections: Vec<DetailSection>,
+        /// The object's relations as queries. Deriving them is free; the rows
+        /// behind them are not, and the panel asks for those separately.
+        relations: Vec<RelationSpec>,
+    },
+    /// The rows behind one object's relations.
+    RelatedRows {
+        context: String,
+        uid: String,
+        groups: Vec<RelatedGroup>,
     },
     ObjectEvents {
         context: String,
@@ -849,6 +1027,28 @@ mod serde_tests {
             .unwrap()["fetchPodContainers"]["reveal"],
             true
         );
+        assert_eq!(
+            serde_json::to_value(Command::SelectObject {
+                window: "main".into(),
+                context: "dev".into(),
+                target: WatchTarget::Kind(ResourceKind::Pods),
+                namespace: "default".into(),
+                name: "app".into(),
+                uid: "1".into(),
+                reveal: false,
+                read: true,
+            })
+            .unwrap()["selectObject"]["read"],
+            true
+        );
+        assert_eq!(
+            serde_json::to_value(Command::ClearSelection {
+                window: "main".into(),
+                context: "dev".into(),
+            })
+            .unwrap()["clearSelection"]["window"],
+            "main"
+        );
         let containers = AppEvent::PodContainers {
             context: "dev".into(),
             uid: "1".into(),
@@ -871,6 +1071,117 @@ mod serde_tests {
         assert_eq!(
             serde_json::to_value(Command::StopExec { id: 4 }).unwrap()["stopExec"]["id"],
             4
+        );
+    }
+
+    /// The Overview sections travel as one-key rows, the shape an event already
+    /// uses, under a titled section.
+    #[test]
+    fn object_detail_sections_are_one_key_rows() {
+        let event = AppEvent::ObjectDetail {
+            context: "dev".into(),
+            uid: "1".into(),
+            relations: Vec::new(),
+            sections: vec![DetailSection {
+                title: "Object".into(),
+                rows: vec![
+                    DetailRow::Text {
+                        label: "UID".into(),
+                        value: "0f8e".into(),
+                    },
+                    DetailRow::Table {
+                        label: "Labels".into(),
+                        columns: vec!["Key".into(), "Value".into()],
+                        rows: vec![vec!["app".into(), "web".into()]],
+                    },
+                    DetailRow::Badges {
+                        label: "Selector".into(),
+                        items: vec!["app=web".into()],
+                    },
+                    DetailRow::Ports {
+                        label: "Ports".into(),
+                        ports: vec![DetailPort {
+                            label: "http: 80/TCP".into(),
+                            port: 80,
+                            proto: "TCP".into(),
+                        }],
+                    },
+                ],
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({
+                "objectDetail": {
+                    "context": "dev",
+                    "uid": "1",
+                    "relations": [],
+                    "sections": [{
+                        "title": "Object",
+                        "rows": [
+                            { "text": { "label": "UID", "value": "0f8e" } },
+                            { "table": {
+                                "label": "Labels",
+                                "columns": ["Key", "Value"],
+                                "rows": [["app", "web"]]
+                            } },
+                            { "badges": { "label": "Selector", "items": ["app=web"] } },
+                            { "ports": {
+                                "label": "Ports",
+                                "ports": [{ "label": "http: 80/TCP", "port": 80, "proto": "TCP" }]
+                            } }
+                        ]
+                    }]
+                }
+            })
+        );
+    }
+
+    /// A relation travels as a query rather than as rows, and `RelatedRows`
+    /// answers it.
+    #[test]
+    fn relation_queries_travel_as_one_key_objects() {
+        assert_eq!(
+            serde_json::to_value(RelationQuery::Labels {
+                selector: "app=web".into()
+            })
+            .unwrap(),
+            serde_json::json!({ "labels": { "selector": "app=web" } })
+        );
+        // A relation with nothing to match on is a bare tag, which is how serde
+        // sends a unit variant — `{ "children": null }` would not deserialize.
+        assert_eq!(
+            serde_json::to_value(RelationQuery::Children).unwrap(),
+            serde_json::json!("children")
+        );
+        let event = AppEvent::RelatedRows {
+            context: "dev".into(),
+            uid: "1".into(),
+            groups: vec![RelatedGroup {
+                title: "Pods".into(),
+                kind: ResourceKind::Pods,
+                total: Some(312),
+                truncated: true,
+                note: None,
+                rows: Vec::new(),
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({
+                "relatedRows": {
+                    "context": "dev",
+                    "uid": "1",
+                    "groups": [{
+                        "title": "Pods",
+                        "kind": "pods",
+                        "total": 312,
+                        "truncated": true,
+                        "note": null,
+                        "rows": []
+                    }]
+                }
+            })
         );
     }
 }

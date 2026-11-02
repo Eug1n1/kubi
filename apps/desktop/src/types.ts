@@ -264,7 +264,36 @@ export type Command =
   | { setNamespace: { context: string; namespace: string | null } }
   | { watch: { context: string; target: WatchTarget } }
   | { stopWatch: { context: string } }
+  | {
+      selectObject: {
+        /**
+         * What this window's detail panel is showing, so the watch that already
+         * lists the kind can keep it current. `read` asks for the one read a
+         * selection needs; a tab coming back to the front passes false, which is
+         * what keeps it from discarding a YAML draft.
+         */
+        window: string;
+        context: string;
+        target: WatchTarget;
+        namespace: string;
+        name: string;
+        uid: string;
+        reveal: boolean;
+        read: boolean;
+      };
+    }
+  | { clearSelection: { window: string; context: string } }
   | { fetchOverview: { context: string } }
+  | {
+      fetchRelated: {
+        context: string;
+        namespace: string;
+        uid: string;
+        relations: RelationSpec[];
+        /** The one relation to return in full rather than up to the cap. */
+        expand: string | null;
+      };
+    }
   | { fetchEvents: { context: string; namespace: string; name: string; uid: string } }
   | { fetchWarnings: { context: string; namespace: string | null } }
   | {
@@ -345,6 +374,8 @@ export type AppEvent =
   | { metricsUnavailable: { context: string; kind: ResourceKind; message: string } }
   | { yaml: { context: string; uid: string; yaml: string } }
   | { objectData: { context: string; uid: string; entries: DataEntry[] } }
+  | { objectDetail: { context: string; uid: string; sections: DetailSection[]; relations: RelationSpec[] } }
+  | { relatedRows: { context: string; uid: string; groups: RelatedGroup[] } }
   | { objectEvents: { context: string; uid: string; events: EventInfo[] } }
   | { warnings: { context: string; namespace: string | null; objects: ObjectWarning[] } }
   | { podSources: { context: string; uid: string } & PodSources }
@@ -393,6 +424,88 @@ export type View =
   | { kind: "custom"; target: CrTarget };
 
 export type DetailTab = "overview" | "yaml" | "metrics" | "data" | "events" | "sources";
+
+/**
+ * One block of the Overview tab, built by the engine from the object. The
+ * engine decides what is in it and `detail.ts` decides where it sits.
+ */
+export type DetailSection = {
+  title: string;
+  rows: DetailRow[];
+};
+
+/**
+ * A row of a section. The key says how to read the fields, so the panel renders
+ * what the engine measured instead of reading the object a second time.
+ */
+export type DetailRow =
+  | { text: { label: string; value: string } }
+  | { list: { label: string; items: string[] } }
+  | { badges: { label: string; items: string[] } }
+  | { table: { label: string; columns: string[]; rows: string[][] } }
+  | { ports: { label: string; ports: DetailPort[] } }
+  | { links: { label: string; links: DetailLink[] } }
+  | { conditions: { label: string; conditions: DetailCondition[] } };
+
+/** One port a Service exposes, as the panel needs it to offer a forward. */
+export type DetailPort = {
+  label: string;
+  port: number;
+  proto: string;
+};
+
+/**
+ * How a relation's rows are found. A relation carries the query rather than the
+ * rows, so the panel can tell a relation it has already read from one whose
+ * query has just changed.
+ */
+export type RelationQuery =
+  | { labels: { selector: string } }
+  | { fields: { selector: string } }
+  | { names: { names: string[] } }
+  | "children";
+
+/** A list the panel can ask for: what to call it, what kind, and how to find it. */
+export type RelationSpec = {
+  title: string;
+  kind: ResourceKind;
+  query: RelationQuery;
+};
+
+/** One relation's rows, with what the panel needs to say how complete they are. */
+export type RelatedGroup = {
+  title: string;
+  kind: ResourceKind;
+  /** How many the cluster holds, when the API server would say. */
+  total: number | null;
+  /** True when the cap cut the list short. */
+  truncated: boolean;
+  /** Why there are no rows, when the list could not be read at all. */
+  note: string | null;
+  rows: ResourceRow[];
+};
+
+/**
+ * Somewhere the object points at. `target` is null when the engine has no view
+ * for it — an owner reference to a custom kind carries no plural — and the row
+ * then shows the name as plain text.
+ */
+export type DetailLink = {
+  label: string;
+  namespace: string;
+  name: string;
+  target: WatchTarget | null;
+};
+
+/** One entry of `status.conditions`, reduced to what a row can show. */
+export type DetailCondition = {
+  name: string;
+  status: string;
+  tone: StatusTone;
+  reason: string;
+  message: string;
+  sinceSecs: number | null;
+};
 
 export type LogSnapshot = {
   kind: ResourceKind;
@@ -494,6 +607,18 @@ export type Tab = {
   namespace: string | null;
   data: DataEntry[] | null;
   dataFor: string | null;
+  /** Overview sections of the object, and the row they were read for. */
+  detail: DetailSection[] | null;
+  detailFor: string | null;
+  /** The objects the selected one points at, and the row they were read for. */
+  related: RelatedGroup[] | null;
+  relatedFor: string | null;
+  /** The queries behind `related`, so the panel can tell when one has changed. */
+  relatedSpecs: RelationSpec[];
+  /** When the relations were last asked for, for the refresh throttle. */
+  relatedAt: number;
+  /** The one relation the user asked to see in full. */
+  relatedExpand: string | null;
   events: EventInfo[] | null;
   eventsFor: string | null;
   sources: PodSources | null;
@@ -512,6 +637,8 @@ export type PendingDelete = {
 };
 
 export type PendingSelect = {
+  /** The cluster the object lives in, so a link cannot land in the wrong one. */
+  context: string;
   target: WatchTarget;
   namespace: string;
   name: string;
@@ -536,6 +663,7 @@ export function eventScope(event: AppEvent): string | null {
   if ("metricsUnavailable" in event) return event.metricsUnavailable.context;
   if ("yaml" in event) return event.yaml.context;
   if ("objectData" in event) return event.objectData.context;
+  if ("objectDetail" in event) return event.objectDetail.context;
   if ("objectEvents" in event) return event.objectEvents.context;
   if ("warnings" in event) return event.warnings.context;
   if ("podSources" in event) return event.podSources.context;
@@ -557,4 +685,9 @@ export function watchOf(view: View): WatchTarget | null {
   if (view.kind === "resource") return { kind: view.resource };
   if (view.kind === "custom") return { custom: view.target };
   return null;
+}
+
+/** The view that shows a target — the inverse of `watchOf`. */
+export function viewOf(target: WatchTarget): View {
+  return "kind" in target ? { kind: "resource", resource: target.kind } : { kind: "custom", target: target.custom };
 }

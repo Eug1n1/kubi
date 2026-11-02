@@ -44,6 +44,8 @@ import type {
   PendingDelete,
   PendingSelect,
   PortForward,
+  RelatedGroup,
+  RelationSpec,
   ResourceKind,
   ResourceRow,
   RowMenu,
@@ -51,7 +53,7 @@ import type {
   View,
   WatchTarget,
 } from "./types";
-import { eventKey, eventScope, sameTarget, sameView, watchOf } from "./types";
+import { eventKey, eventScope, sameTarget, sameView, viewOf, watchOf } from "./types";
 import { canExec, canForward, canLogs, canRestart, logTitle, podSettled, viewTitle } from "./catalog";
 
 type HistPoint = { t: number; cpu: number; mem: number };
@@ -64,10 +66,31 @@ function omit<T>(map: Record<string, T>, key: string): Record<string, T> {
   return next;
 }
 
+/** Whether two sets of relation queries are the same, in the same order. */
+function sameSpecs(left: RelationSpec[], right: RelationSpec[]): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/** A tab's relation state before anything has been read for it. */
+function blankRelated() {
+  return {
+    related: null as RelatedGroup[] | null,
+    relatedFor: null as string | null,
+    relatedSpecs: [] as RelationSpec[],
+    relatedAt: 0,
+    relatedExpand: null as string | null,
+  };
+}
+
 /** Warning scan throttle: refreshes at most this often while a list is open. */
 const WARNINGS_TTL_MS = 8_000;
 /** ...and at least this often, so badges do not go stale. */
 const WARNINGS_REFRESH_MS = 20_000;
+
+/** Relation refresh: at most this often when the selected object changes. */
+const RELATED_TTL_MS = 8_000;
+/** ...and at least this often, so a pod count does not go stale. */
+const RELATED_REFRESH_MS = 20_000;
 
 type Session = {
   context: string | null;
@@ -105,6 +128,9 @@ function blankTab(view: View, context: string, namespace: string | null, id: num
     namespace,
     data: null,
     dataFor: null,
+    detail: null,
+    detailFor: null,
+    ...blankRelated(),
     events: null,
     eventsFor: null,
     sources: null,
@@ -216,6 +242,9 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
     byUid: {},
   });
   const warningsAt = useRef(0);
+  /** What the engine was last told this window is showing, so a repeated
+   * selection is not re-sent on every row update. */
+  const selectionSent = useRef("");
   const [createOpen, setCreateOpen] = useState(false);
   const [createYaml, setCreateYaml] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
@@ -831,6 +860,50 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
   }
 
   /**
+   * Reads the rows behind the selected object's relations. Called when a
+   * relation's query changes and on a timer, so a Service whose pods come and go
+   * does not keep a stale count.
+   */
+  function requestRelated(
+    index = session.current.active,
+    options: { force?: boolean } = {},
+  ) {
+    if (index == null) return;
+    const tab = session.current.tabs[index];
+    const row = tab?.rows.find((item) => item.uid === tab.selected);
+    const relations = tab?.relatedSpecs ?? [];
+    if (!tab || !row || relations.length === 0) return;
+    const now = Date.now();
+    // The first read for an object is not a refresh: the panel has nothing for it
+    // yet, so it goes at once. A refresh of an object already on screen waits for
+    // the floor, which is what stops a busy watch becoming a list per event.
+    const first = tab.relatedFor !== row.uid;
+    if (!first && !options.force && now - tab.relatedAt < RELATED_TTL_MS) return;
+    updateTabs((items) =>
+      items.map((item, i) => (i === index ? { ...item, relatedAt: now } : item)),
+    );
+    void send({
+      fetchRelated: {
+        context: tab.context,
+        namespace: row.namespace,
+        uid: row.uid,
+        relations,
+        expand: tab.relatedExpand,
+      },
+    });
+  }
+
+  /** Asks for one relation in full rather than up to the engine's cap. */
+  function showAllRelated(title: string) {
+    const index = session.current.active;
+    if (index == null) return;
+    updateTabs((items) =>
+      items.map((item, i) => (i === index ? { ...item, relatedExpand: title } : item)),
+    );
+    requestRelated(index, { force: true });
+  }
+
+  /**
    * Scans warning events once for the whole list, so rows carry a badge before
    * anything is selected. Throttled: the watch pushes rows often.
    */
@@ -884,6 +957,53 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
     });
   }
 
+  /**
+   * Keeps the engine's idea of what this window is showing in step with the tab
+   * in front, so the watch that already lists the kind can keep the panel
+   * current. The read is asked for only when the panel has nothing for the row
+   * yet: a tab coming back to the front must not discard a YAML draft.
+   */
+  function syncSelection(index = session.current.active) {
+    if (index == null) return;
+    const tab = session.current.tabs[index];
+    if (!tab) return;
+    const target = watchOf(tab.view);
+    const row = tab.rows.find((item) => item.uid === tab.selected);
+    if (!target || !row) {
+      const key = `none|${tab.context}`;
+      if (key === selectionSent.current) return;
+      selectionSent.current = key;
+      void send({ clearSelection: { window: ownLabel, context: tab.context } });
+      return;
+    }
+    // The reveal flag is part of what the engine has to know, so it is part of
+    // what a repeat is measured against: toggling it must reach the engine even
+    // though the row has not changed.
+    const key = `${tab.context}|${row.uid}|${tab.reveal ? 1 : 0}`;
+    if (key === selectionSent.current) return;
+    // A different object is a different set of relations, so "show all" belongs
+    // to the object it was asked for and does not follow the selection.
+    const moved = !selectionSent.current.startsWith(`${tab.context}|${row.uid}|`);
+    selectionSent.current = key;
+    if (moved && tab.relatedExpand != null) {
+      updateTabs((items) =>
+        items.map((item, i) => (i === index ? { ...item, relatedExpand: null } : item)),
+      );
+    }
+    void send({
+      selectObject: {
+        window: ownLabel,
+        context: tab.context,
+        target,
+        namespace: row.namespace,
+        name: row.name,
+        uid: row.uid,
+        reveal: tab.reveal,
+        read: tab.detailFor !== row.uid,
+      },
+    });
+  }
+
   function activate(index: number) {
     const tab = session.current.tabs[index];
     if (!tab) return;
@@ -897,6 +1017,9 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
     updateTabs((items) => items.map((item, i) => (i === index ? { ...item, waiting: true } : item)));
     void send({ setNamespace: { context: tab.context, namespace: tab.namespace } });
     void send({ watch: { context: tab.context, target } });
+    // The tab in front is what this window is showing: the engine follows it,
+    // and reads only what the panel does not already have.
+    syncSelection(index);
     if (tab.detailTab === "events") requestEvents(index);
     if (tab.detailTab === "sources") requestSources(index);
   }
@@ -933,6 +1056,9 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
               yamlFor: null,
               data: null,
               dataFor: null,
+              detail: null,
+              detailFor: null,
+              ...blankRelated(),
               events: null,
               eventsFor: null,
               sources: null,
@@ -951,7 +1077,7 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
     if (target) void send({ watch: { context: tab.context, target } });
   }
 
-  function openView(view: View, namespace?: string | null) {
+  function openView(view: View, namespace?: string | null, context = session.current.context) {
     if (view.kind === "overview") {
       showHome("cluster");
       return;
@@ -961,7 +1087,7 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
       return;
     }
     const existing = session.current.tabs.findIndex(
-      (tab) => tab.context === session.current.context && sameView(tab.view, view),
+      (tab) => tab.context === context && sameView(tab.view, view),
     );
     if (existing >= 0) {
       if (namespace != null && session.current.tabs[existing]?.namespace !== namespace) {
@@ -973,7 +1099,7 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
       activate(existing);
       return;
     }
-    const tab = blankTab(view, session.current.context ?? "", namespace === undefined ? inherited() : namespace, session.current.nextId);
+    const tab = blankTab(view, context ?? "", namespace === undefined ? inherited() : namespace, session.current.nextId);
     session.current.nextId += 1;
     commitTabs([...session.current.tabs, tab]);
     activate(session.current.tabs.length - 1);
@@ -984,7 +1110,9 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
     if (!pending) return;
     const index = session.current.tabs.findIndex((tab) => {
       const target = watchOf(tab.view);
-      return target != null && sameTarget(target, pending.target);
+      return (
+        tab.context === pending.context && target != null && sameTarget(target, pending.target)
+      );
     });
     if (index < 0) return;
     const row = session.current.tabs[index]?.rows.find(
@@ -1019,6 +1147,9 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
                     yamlFor: null,
                     data: null,
                     dataFor: null,
+                    detail: null,
+                    detailFor: null,
+                    ...blankRelated(),
                     events: null,
                     eventsFor: null,
                     sources: null,
@@ -1034,9 +1165,10 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
     );
     if (focusChanged) {
       setHistory([]);
-      requestYaml(index);
+      // One command for the panel's first read: the engine answers with the
+      // YAML, the Overview sections and, for a pod, its containers.
+      syncSelection(index);
       requestEvents(index);
-      if (tab.view.kind === "resource" && tab.view.resource === "pods") requestPodContainers(index);
     }
   }
 
@@ -1243,9 +1375,8 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
       const withUsage = applyUsage(rows, from, session.current.usage);
       const observedAt = Date.now();
       const live = new Set(withUsage.map((row) => row.uid));
-      const refreshYaml: number[] = [];
       updateTabs((items) =>
-        items.map((tab, index) => {
+        items.map((tab) => {
           const watching = watchOf(tab.view);
           // Rows belong to one cluster: a watch in another must not claim them.
           if (!watching || tab.context !== from || !sameTarget(watching, target)) return tab;
@@ -1253,7 +1384,6 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
           const selected = tab.selected != null && live.has(tab.selected) ? tab.selected : (selection[0] ?? null);
           const anchor = tab.anchor != null && live.has(tab.anchor) ? tab.anchor : selected;
           const focusedGone = tab.selected !== selected;
-          if (focusedGone && selected) refreshYaml.push(index);
           return {
             ...tab,
             rows: withUsage,
@@ -1262,11 +1392,27 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
             selection,
             selected,
             anchor,
-            ...(focusedGone ? { yaml: null, yamlFor: null, data: null, dataFor: null } : {}),
+            // A row that took the focus over is read afresh: the panel follows
+            // the object, so it must not inherit what the old one showed.
+            ...(focusedGone
+              ? {
+                  yaml: null,
+                  yamlFor: null,
+                  data: null,
+                  dataFor: null,
+                  detail: null,
+                  detailFor: null,
+                  ...blankRelated(),
+                  containers: null,
+                  containersFor: null,
+                }
+              : {}),
           };
         }),
       );
-      for (const index of refreshYaml) requestYaml(index);
+      // The panel of the tab in front follows the object it shows, so a row
+      // that took the focus over is read without waiting for a click.
+      syncSelection();
       selectPending();
       const index = session.current.active;
       const tab = index == null ? undefined : session.current.tabs[index];
@@ -1325,6 +1471,36 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
         items.map((tab) =>
           tab.context === event.objectData.context && tab.selected === event.objectData.uid
             ? { ...tab, data: event.objectData.entries, dataFor: event.objectData.uid }
+            : tab,
+        ),
+      );
+      return;
+    }
+    if (key === "objectDetail" && "objectDetail" in event) {
+      const { context: from, uid, sections, relations } = event.objectDetail;
+      const index = session.current.tabs.findIndex(
+        (tab) => tab.context === from && tab.selected === uid,
+      );
+      if (index < 0) return;
+      const changed = !sameSpecs(session.current.tabs[index]?.relatedSpecs ?? [], relations);
+      updateTabs((items) =>
+        items.map((item, i) =>
+          i === index
+            ? { ...item, detail: sections, detailFor: uid, relatedSpecs: relations }
+            : item,
+        ),
+      );
+      // A relation whose query has changed is read again, and so is an object the
+      // panel has no rows for yet; a repeat of what is already on screen is not.
+      const fetched = session.current.tabs[index]?.relatedFor === uid;
+      if (relations.length > 0 && (changed || !fetched)) requestRelated(index);
+      return;
+    }
+    if (key === "relatedRows" && "relatedRows" in event) {
+      updateTabs((items) =>
+        items.map((tab) =>
+          tab.context === event.relatedRows.context && tab.selected === event.relatedRows.uid
+            ? { ...tab, related: event.relatedRows.groups, relatedFor: event.relatedRows.uid }
             : tab,
         ),
       );
@@ -1772,7 +1948,16 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
     if (active == null || !context) return;
     requestWarnings(true);
     const id = window.setInterval(() => requestWarnings(true), WARNINGS_REFRESH_MS);
-    return () => window.clearInterval(id);
+    // A Service's own object does not change while its pods come and go, so the
+    // relations are asked for again on a timer as well as on a change.
+    const related = window.setInterval(
+      () => requestRelated(session.current.active, { force: true }),
+      RELATED_REFRESH_MS,
+    );
+    return () => {
+      window.clearInterval(id);
+      window.clearInterval(related);
+    };
   }, [active, context, activeNamespace]);
 
   return {
@@ -1897,11 +2082,18 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
     clearSelection: () => {
       const index = session.current.active;
       if (index == null) return;
+      const tab = session.current.tabs[index];
       updateTabs((items) =>
         items.map((item, i) => (i === index ? { ...item, selected: null, selection: [], anchor: null } : item)),
       );
+      if (!tab) return;
+      // Closing the panel ends the watch's interest in the object, and with it
+      // the sources it was keeping.
+      selectionSent.current = `none|${tab.context}`;
+      void send({ clearSelection: { window: ownLabel, context: tab.context } });
     },
     setDetailTab: showDetail,
+    showAllRelated,
     openLogs: () => {
       const index = session.current.active;
       const tab = index == null ? undefined : session.current.tabs[index];
@@ -1996,12 +2188,28 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
       if (index == null) return;
       updateTabs((items) =>
         items.map((item, i) =>
-          i === index ? { ...item, reveal, yaml: null, yamlFor: null, data: null, dataFor: null } : item,
+          i === index
+            ? {
+                ...item,
+                reveal,
+                yaml: null,
+                yamlFor: null,
+                data: null,
+                dataFor: null,
+                detail: null,
+                detailFor: null,
+                ...blankRelated(),
+                containers: null,
+                containersFor: null,
+              }
+            : item,
         ),
       );
-      requestYaml(index);
+      // The flag rides with the selection, so what the watch rebuilds is masked
+      // the same way the read is. Nulling the panel above is what makes the
+      // re-registration below ask for that read.
+      syncSelection(index);
       if (session.current.tabs[index]?.detailTab === "sources") requestSources(index);
-      if (session.current.tabs[index]?.detailTab === "overview") requestPodContainers(index);
     },
     refresh: () => {
       if (refreshingRef.current) return;
@@ -2303,10 +2511,14 @@ export function useKubi({ pinned = null }: { pinned?: string | null } = {}) {
       if (pods && item.probeOnly && podSettled(row)) return null;
       return item;
     },
-    openNamed: (target: CrTarget, namespace: string, name: string) => {
-      const watch: WatchTarget = { custom: target };
-      session.current.pending = { target: watch, namespace, name };
-      openView({ kind: "custom", target });
+    /**
+     * Opens the view for a target and selects one object in it. The cluster is
+     * named rather than assumed: a link in the detail panel points at the
+     * object's own cluster, which is not always the one on screen.
+     */
+    openNamed: (target: WatchTarget, namespace: string, name: string, context: string) => {
+      session.current.pending = { context, target, namespace, name };
+      openView(viewOf(target), namespace, context);
       selectPending();
     },
   };

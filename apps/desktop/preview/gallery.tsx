@@ -9,11 +9,15 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ContextMenuBody, ContextRail } from "../src/contexts";
 import { About, Colors, SettingsModal, type AboutStatus } from "../src/settings";
 import { LogPane } from "../src/logWindow";
-import { ArgoScreen, Detail, OverviewScreen, PinnedSplash, ResourceScreen, SearchModal, Sidebar, TopBar } from "../src/screens";
+import { ArgoScreen, Detail, OverviewScreen, PinnedSplash, ResourceScreen, SearchModal, SessionDrawer, Sidebar, TopBar } from "../src/screens";
 import { DEFAULT_KEYMAP } from "../src/keymap";
 import { DEFAULT_THEME, BUILTIN_THEMES, themeTokens } from "../src/theme";
 import type { Kubi } from "../src/useKubi";
-import type { ClusterOverview, EventInfo, LogSnapshot, ResourceRow, Tab } from "../src/types";
+import type { ClusterOverview, DetailSection, DockTab, EventInfo, LogSnapshot, RelatedGroup, ResourceKind, ResourceRow, Tab } from "../src/types";
+
+// `SessionDrawer` reads `window.innerHeight` while it renders and this harness runs in
+// Node: give it that one field. Harness chrome only — never shipped.
+(globalThis as { window?: { innerHeight: number } }).window ??= { innerHeight: 900 };
 
 const row = (
   uid: string,
@@ -59,6 +63,332 @@ const events: EventInfo[] = [
   { kind: "Normal", reason: "Scheduled", message: "Successfully assigned grafana/grafana-deployment-85f7894766-qq7j4 to node-a", count: 1, ageSecs: 900, source: "default-scheduler" },
 ];
 
+/**
+ * The sections every object gets, so a kind's own ones can be shown where they
+ * land: between the status and the metadata lists.
+ */
+const metaSections = (kindSections: DetailSection[]): DetailSection[] => [
+  { title: "Object", rows: [{ text: { label: "UID", value: "8f2c1d40-1c4a-4b7e-9f2a-6d5e0a1b3c4d" } }] },
+  {
+    title: "Status",
+    rows: [
+      {
+        conditions: {
+          label: "Conditions",
+          conditions: [
+            { name: "Ready", status: "True", tone: "ok", reason: "", message: "", sinceSecs: 86_400 },
+          ],
+        },
+      },
+    ],
+  },
+  ...kindSections,
+  {
+    title: "Labels",
+    rows: [
+      {
+        table: {
+          label: "Labels",
+          columns: ["Key", "Value"],
+          rows: [["app.kubernetes.io/name", "grafana"]],
+        },
+      },
+    ],
+  },
+  {
+    title: "Annotations",
+    rows: [
+      {
+        table: {
+          label: "Annotations",
+          columns: ["Key", "Value"],
+          rows: [["deployment.kubernetes.io/revision", "7"]],
+        },
+      },
+    ],
+  },
+];
+
+/** Reachability, a selector and a port the panel offers to forward. */
+const serviceSections: DetailSection[] = [
+  {
+    title: "Service",
+    rows: [
+      { text: { label: "Type", value: "LoadBalancer" } },
+      { text: { label: "Cluster IP", value: "10.43.12.7" } },
+      { badges: { label: "Load balancer", items: ["34.89.12.4"] } },
+      {
+        badges: {
+          label: "Selector",
+          items: ["app.kubernetes.io/instance=grafana", "app.kubernetes.io/name=grafana"],
+        },
+      },
+      {
+        ports: {
+          label: "Ports",
+          ports: [
+            { label: "http: 80/TCP", port: 80, proto: "TCP" },
+            { label: "grafana: 3000/TCP", port: 3000, proto: "TCP" },
+            { label: "metrics: 9090/UDP", port: 9090, proto: "UDP" },
+          ],
+        },
+      },
+    ],
+  },
+];
+
+/** Identity, addresses, capacity next to allocatable, and taints. */
+const nodeSections: DetailSection[] = [
+  {
+    title: "Node",
+    rows: [
+      { badges: { label: "Roles", items: ["control-plane", "worker"] } },
+      { text: { label: "Kubelet", value: "v1.31.1" } },
+      { text: { label: "OS", value: "Ubuntu 24.04.1 LTS" } },
+      { text: { label: "Runtime", value: "containerd://1.7.20" } },
+      { text: { label: "Kernel", value: "6.8.0-45-generic" } },
+      { text: { label: "Architecture", value: "arm64" } },
+    ],
+  },
+  {
+    title: "Addresses",
+    rows: [
+      {
+        table: {
+          label: "Addresses",
+          columns: ["Type", "Address"],
+          rows: [
+            ["InternalIP", "10.0.0.5"],
+            ["Hostname", "node-a"],
+          ],
+        },
+      },
+    ],
+  },
+  {
+    title: "Capacity",
+    rows: [
+      {
+        table: {
+          label: "Capacity",
+          columns: ["Resource", "Capacity", "Allocatable"],
+          rows: [
+            ["cpu", "4", "3900m"],
+            ["ephemeral-storage", "101Gi", "91Gi"],
+            ["memory", "16Gi", "15Gi"],
+            ["pods", "110", "110"],
+          ],
+        },
+      },
+    ],
+  },
+  {
+    title: "Taints",
+    rows: [
+      {
+        table: {
+          label: "Taints",
+          columns: ["Key", "Value", "Effect"],
+          rows: [["dedicated", "gpu", "NoSchedule"]],
+        },
+      },
+    ],
+  },
+];
+
+/** Who a binding binds, and the role it points at. */
+const bindingSections: DetailSection[] = [
+  {
+    title: "Access",
+    rows: [
+      {
+        table: {
+          label: "Subjects",
+          columns: ["Kind", "Name", "Namespace"],
+          rows: [
+            ["ServiceAccount", "grafana", "grafana"],
+            ["User", "eugene", "-"],
+          ],
+        },
+      },
+      {
+        links: {
+          label: "Role",
+          links: [
+            {
+              label: "ClusterRole view",
+              namespace: "",
+              name: "view",
+              target: { kind: "clusterRoles" },
+            },
+          ],
+        },
+      },
+    ],
+  },
+];
+/** What a Role allows, one row per rule. */
+const roleSections: DetailSection[] = [
+  {
+    title: "Rules",
+    rows: [
+      {
+        table: {
+          label: "Rules",
+          columns: ["Resources", "Verbs", "API groups", "Resource names"],
+          rows: [
+            ["pods, pods/log", "get, list, watch", "", "grafana-*"],
+            ["/healthz", "get", "*", "*"],
+          ],
+        },
+      },
+    ],
+  },
+];
+
+/** What a Deployment has rolled out, and the images it runs. */
+const deploymentSections: DetailSection[] = [
+  {
+    title: "Deployment",
+    rows: [
+      { text: { label: "Updated", value: "4" } },
+      { text: { label: "Available", value: "3" } },
+      { text: { label: "Unavailable", value: "1" } },
+      { text: { label: "Strategy", value: "RollingUpdate 25% / 25%" } },
+      { badges: { label: "Selector", items: ["app.kubernetes.io/name=grafana"] } },
+      { list: { label: "Images", items: ["grafana/grafana:11.2.0"] } },
+    ],
+  },
+];
+
+/** What a pod is, where it may land, and the volumes it mounts. */
+const podKindSections: DetailSection[] = [
+  {
+    title: "Pod",
+    rows: [
+      { text: { label: "Node", value: "node-a" } },
+      { text: { label: "Pod IP", value: "10.42.3.19" } },
+      { text: { label: "QoS", value: "Burstable" } },
+      { text: { label: "Restart policy", value: "Always" } },
+      { text: { label: "Restarts", value: "12" } },
+      {
+        links: {
+          label: "Service account",
+          links: [
+            {
+              label: "grafana",
+              namespace: "grafana",
+              name: "grafana",
+              target: { kind: "serviceAccounts" },
+            },
+          ],
+        },
+      },
+      { list: { label: "Images", items: ["grafana/grafana:11.2.0"] } },
+    ],
+  },
+  {
+    title: "Scheduling",
+    rows: [
+      { badges: { label: "Node selector", items: ["kubernetes.io/os=linux"] } },
+      { list: { label: "Tolerations", items: ["dedicated=gpu: NoSchedule"] } },
+    ],
+  },
+  {
+    title: "Volumes",
+    rows: [
+      {
+        table: {
+          label: "Volumes",
+          columns: ["Name", "Type", "Source"],
+          rows: [
+            ["config", "ConfigMap", "grafana-config"],
+            ["storage", "PersistentVolumeClaim", "grafana-data"],
+          ],
+        },
+      },
+    ],
+  },
+];
+
+
+/** What the engine reads off the selected pod: the sections the panel stacks. */
+const sections: DetailSection[] = [
+
+
+  {
+    title: "Object",
+    rows: [
+      { text: { label: "UID", value: "8f2c1d40-1c4a-4b7e-9f2a-6d5e0a1b3c4d" } },
+      { text: { label: "Resource version", value: "184467" } },
+      {
+        links: {
+          label: "Owner references",
+          links: [
+            {
+              label: "ReplicaSet grafana-deployment-85f7894766",
+              namespace: "grafana",
+              name: "grafana-deployment-85f7894766",
+              target: { kind: "replicaSets" },
+            },
+            { label: "Widget w-1", namespace: "grafana", name: "w-1", target: null },
+          ],
+        },
+      },
+      { list: { label: "Finalizers", items: ["example.com/keep"] } },
+    ],
+  },
+  {
+    title: "Status",
+    rows: [
+      {
+        conditions: {
+          label: "Conditions",
+          conditions: [
+            { name: "PodScheduled", status: "True", tone: "ok", reason: "PodScheduled", message: "", sinceSecs: 86_400 },
+            {
+              name: "Ready",
+              status: "False",
+              tone: "bad",
+              reason: "ContainersNotReady",
+              message: "containers with unready status: [grafana]",
+              sinceSecs: 900,
+            },
+            { name: "ContainersReady", status: "Unknown", tone: "warn", reason: "ContainersNotReady", message: "", sinceSecs: 900 },
+          ],
+        },
+      },
+    ],
+  },
+  {
+    title: "Labels",
+    rows: [
+      {
+        table: {
+          label: "Labels",
+          columns: ["Key", "Value"],
+          rows: [
+            ["app.kubernetes.io/name", "grafana"],
+            ["pod-template-hash", "85f7894766"],
+          ],
+        },
+      },
+    ],
+  },
+  {
+    title: "Annotations",
+    rows: [
+      {
+        table: {
+          label: "Annotations",
+          columns: ["Key", "Value"],
+          rows: [["kubectl.kubernetes.io/restartedAt", "2026-01-01T00:00:00Z"]],
+        },
+      },
+    ],
+  },
+];
+
 const overview: ClusterOverview = {
   context: "kz-mgmt",
   nodesReady: 5,
@@ -102,6 +432,15 @@ const tab = (detailTab: Tab["detailTab"], selected: string | null): Tab =>
     namespace: "grafana",
     data: null,
     dataFor: null,
+    detail: selected == null ? null : sections,
+    detailFor: selected,
+    // A pod has no relation lists of its own, so the pod pages show none; the
+    // per-kind pages set these.
+    related: null,
+    relatedFor: null,
+    relatedSpecs: [],
+    relatedAt: 0,
+    relatedExpand: null,
     events: selected == null ? null : events,
     eventsFor: selected,
     sources: null,
@@ -253,6 +592,24 @@ const logs: LogSnapshot = {
   timestamps: true,
 };
 
+/** The dock's sessions as its tab strip holds them: two logs and an exec. */
+const dockTabs: DockTab[] = [
+  { ...logs, id: 1, label: "log-1", detached: false, pane: "log" },
+  { ...logs, id: 2, label: "log-2", detached: false, pane: "log", name: "grafana-deployment-85f7894766-qq7j4" },
+  {
+    pane: "exec",
+    id: 3,
+    label: "exec-1",
+    detached: false,
+    namespace: "grafana",
+    name: "tempo-querier-5f8d9c7b6-p4m2n",
+    containers: ["tempo", "istio-proxy"],
+    container: "tempo",
+    text: "",
+    closed: false,
+  },
+];
+
 const shell = (activeTab: Tab, rail = true) => {
   const kubi = kubiFor(activeTab);
   return `<div class="app${rail ? "" : " no-rail"}">${renderToStaticMarkup(<TopBar kubi={kubi} />)}${
@@ -272,6 +629,46 @@ const listOnly = () => {
 
 const detail = (detailTab: Tab["detailTab"], width = 460) => {
   const activeTab = tab(detailTab, "u1");
+  const kubi = kubiFor(activeTab);
+  return renderToStaticMarkup(<Detail kubi={kubi} width={width} onWidth={noop} />);
+};
+
+/** What a Service's own object points at: a long list, and one it may not read. */
+const relatedGroups: RelatedGroup[] = [
+  { title: "Pods", kind: "pods", total: 312, truncated: true, note: null, rows: rows.slice(0, 5) },
+  {
+    title: "ReplicaSets",
+    kind: "replicaSets",
+    total: 2,
+    truncated: false,
+    note: null,
+    rows: rows.slice(0, 2),
+  },
+  {
+    title: "Services",
+    kind: "services",
+    total: null,
+    truncated: false,
+    note: "listing services is not allowed in this namespace",
+    rows: [],
+  },
+];
+
+/** The panel for another kind: the same shell, that kind's own sections. */
+const detailOf = (
+  resource: ResourceKind,
+  kindSections: DetailSection[],
+  related: RelatedGroup[] | null = relatedGroups,
+  width = 460,
+) => {
+  const activeTab: Tab = {
+    ...tab("overview", "u1"),
+    view: { kind: "resource", resource },
+    detail: metaSections(kindSections),
+    detailFor: "u1",
+    related,
+    relatedFor: related == null ? null : "u1",
+  };
   const kubi = kubiFor(activeTab);
   return renderToStaticMarkup(<Detail kubi={kubi} width={width} onWidth={noop} />);
 };
@@ -350,6 +747,13 @@ const pages: [string, string, string?][] = [
   ["Context window — shell without the rail", shell(tab("overview", null), false)],
   ["Object list — pods", listOnly()],
   ["Detail — overview with warnings", detail("overview")],
+  ["Detail — overview at its narrowest", detail("overview", 280)],
+  ["Detail — service", detailOf("services", serviceSections)],
+  ["Detail — pod sections", detailOf("pods", podKindSections)],
+  ["Detail — deployment", detailOf("deployments", deploymentSections)],
+  ["Detail — role", detailOf("roles", roleSections)],
+  ["Detail — node", detailOf("nodes", nodeSections)],
+  ["Detail — role binding", detailOf("roleBindings", bindingSections)],
   ["Detail — events", detail("events")],
   ["Overview screen", renderToStaticMarkup(<OverviewScreen kubi={kubiFor(tab("overview", null))} />)],
   ["Argo screen", renderToStaticMarkup(<ArgoScreen kubi={argoKubi()} />)],
@@ -401,6 +805,16 @@ const pages: [string, string, string?][] = [
     `<div class="log-drawer log-window" style="height:360px">${renderToStaticMarkup(
       <LogPane logs={logs} follow={1} onPod={noop} onContainer={noop} onPrevious={noop} onTimestamps={noop} onClose={noop} />,
     )}</div>`,
+  ],
+  [
+    "Dock — log and exec tabs",
+    renderToStaticMarkup(
+      <SessionDrawer
+        kubi={{ ...kubiFor(tab("overview", null)), dockTabs, activeDock: "log-1" }}
+        height={320}
+        onHeight={noop}
+      />,
+    ),
   ],
   [
     "Primitives",

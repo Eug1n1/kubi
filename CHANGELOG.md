@@ -11,7 +11,40 @@ shipped as.
 
 ## Unreleased
 
+### Added
+
+- The detail panel lists the objects a resource points at: the pods of a Service,
+  a workload or a Node, the ReplicaSets of a Deployment, and the Services an
+  Ingress sends traffic to. A pod's node and a volume's claim are links now. A
+  long list is capped at a hundred rows and says so — `Pods 100 of 312` — with a
+  Show all that asks for that one list, and the counts keep up while the object
+  stays selected. A list the cluster will not let Kubi read says so in its own
+  block instead of failing the panel.
+- The detail panel's Overview reads the object itself instead of the object's
+  row in the list, so it now shows what the list cannot: every condition with
+  its status, reason and age; the object's UID and resource version; its
+  finalizers; and its labels and annotations. An owner reference is a link, so
+  a pod opens the ReplicaSet that owns it, and a custom resource gets the same
+  block as a built-in one.
+
+- The detail panel shows each kind's own sections, read from the object: a pod's
+  node, IPs, QoS, restart policy, images, the ServiceAccount it runs as, where it
+  may land (its node selector and tolerations) and the volumes it mounts; a
+  workload's rollout counts, strategy, selector and images; a Service's
+  reachability, its selector and its ports (a TCP port is still one click from a
+  forward); a Node's identity, addresses, capacity next to what it will actually
+  hand out, and taints; a Role's rules as a table; a binding's subjects with the
+  role it binds them to as a link; and a ServiceAccount's Secrets. Live CPU and
+  memory stay in a Usage block of their own, because the object does not carry
+  them.
+
 ### Fixed
+
+- The detail panel follows the object it shows: the Overview facts, the container
+  states and a pod's containers now update as the object changes, instead of
+  freezing at whatever they were when the row was selected. A pod that leaves
+  `Pending` no longer sits on `containerInitializing` until the row is clicked
+  again.
 
 - The namespace menu gives every namespace one shared width, so a short name
   highlights across the whole row. A name that does not fit is cut off, and
@@ -24,6 +57,10 @@ shipped as.
   locations to `PATH`, so the plugin is found when Kubi is launched from
   Finder instead of a terminal. A failed connect now also names the cluster
   it failed for.
+
+- The tab strip above an object list no longer shows a scrollbar down its side. The
+  1px that fed it was the bottom of the active tab's underline, which now draws its
+  full two pixels. The same for the log and exec tab strip.
 
 ## [0.3.2] - 2026-10-16
 

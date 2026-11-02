@@ -1,0 +1,205 @@
+import { describe, expect, it } from "vitest";
+
+import { conditionReason, overviewBlocks, relatedCount, rowCaption, sectionCount, startsFolded, type Block } from "./detail";
+import type { DetailSection, RelatedGroup } from "./types";
+
+const section = (title: string): DetailSection => ({ title, rows: [] });
+
+/** A block as a word, so an expectation reads like the screen. */
+const titles = (blocks: Block[]): string[] =>
+  blocks.map((block) => (block.kind === "section" ? block.section.title : block.kind));
+
+describe("overviewBlocks", () => {
+  it("puts the object and its status above the long metadata lists", () => {
+    const blocks = overviewBlocks([
+      section("Annotations"),
+      section("Labels"),
+      section("Status"),
+      section("Object"),
+    ]);
+    expect(titles(blocks)).toEqual(["Object", "Status", "Labels", "Annotations"]);
+  });
+
+  it("keeps a kind's own section above the metadata lists", () => {
+    const blocks = overviewBlocks([section("Rules"), section("Labels"), section("Object")]);
+    expect(titles(blocks)).toEqual(["Object", "Rules", "Labels"]);
+  });
+
+  it("keeps the arrival order of two sections it has never heard of", () => {
+    const blocks = overviewBlocks([section("Rules"), section("Subjects")]);
+    expect(titles(blocks)).toEqual(["Rules", "Subjects"]);
+  });
+
+  it("puts the row-derived facts with the kind's own rows", () => {
+    const blocks = overviewBlocks([section("Labels"), section("Rules"), section("Object")], {
+      facts: true,
+    });
+    expect(titles(blocks)).toEqual(["Object", "Rules", "facts", "Labels"]);
+  });
+
+  it("puts the objects it points at after its own rows and before the metadata", () => {
+    const blocks = overviewBlocks(
+      [section("Labels"), section("Object"), section("Rules")],
+      { related: true },
+    );
+    expect(titles(blocks)).toEqual(["Object", "Rules", "related", "Labels"]);
+  });
+
+  it("puts usage after the relations, because the object does not carry it", () => {
+    const blocks = overviewBlocks([section("Object"), section("Labels")], {
+      related: true,
+      usage: true,
+    });
+    expect(titles(blocks)).toEqual(["Object", "related", "usage", "Labels"]);
+  });
+
+  it("leaves the array it was given alone", () => {
+    const input = [section("Labels"), section("Object")];
+    overviewBlocks(input);
+    expect(input.map((item) => item.title)).toEqual(["Labels", "Object"]);
+  });
+});
+
+describe("relatedCount", () => {
+  const group = (rows: number, truncated: boolean, total: number | null): RelatedGroup => ({
+    title: "Pods",
+    kind: "pods",
+    total,
+    truncated,
+    note: null,
+    rows: Array.from({ length: rows }, (_, index) => ({ uid: String(index) }) as never),
+  });
+
+  it("says how many of how many when the list was cut short", () => {
+    expect(relatedCount(group(100, true, 312))).toBe("100 of 312");
+  });
+
+  it("admits it does not know how many more there are", () => {
+    expect(relatedCount(group(100, true, null))).toBe("100+");
+  });
+
+  it("says just the count when the list is complete", () => {
+    expect(relatedCount(group(4, false, 4))).toBe("4");
+  });
+
+  it("says nothing when the list could not be read at all", () => {
+    // A header claiming "Services 0" above "not allowed" would be saying the
+    // cluster holds none of them.
+    expect(relatedCount({ ...group(0, false, null), note: "not allowed" })).toBeNull();
+  });
+});
+
+describe("startsFolded", () => {
+  it("folds the metadata that runs long", () => {
+    expect(startsFolded("Labels")).toBe(true);
+    expect(startsFolded("Annotations")).toBe(true);
+  });
+
+  it("folds where a pod may land, which is a list of keys", () => {
+    expect(startsFolded("Scheduling")).toBe(true);
+  });
+
+  it("leaves everything else open", () => {
+    expect(startsFolded("Object")).toBe(false);
+    expect(startsFolded("Rules")).toBe(false);
+  });
+});
+
+describe("rowCaption", () => {
+  it("drops a label that only repeats the section title", () => {
+    expect(rowCaption("Labels", "Labels")).toBeNull();
+  });
+
+  it("keeps a label that says something the title does not", () => {
+    expect(rowCaption("Status", "Conditions")).toBe("Conditions");
+  });
+});
+
+describe("conditionReason", () => {
+  it("drops a reason that only repeats the condition's own name", () => {
+    expect(conditionReason("PodScheduled", "PodScheduled")).toBeNull();
+  });
+
+  it("drops an empty reason", () => {
+    expect(conditionReason("Ready", "")).toBeNull();
+  });
+
+  it("keeps a reason that says something the name does not", () => {
+    expect(conditionReason("Ready", "ContainersNotReady")).toBe("ContainersNotReady");
+  });
+});
+
+describe("sectionCount", () => {
+  it("counts the entries of a one-table section, not its single row", () => {
+    const labels: DetailSection = {
+      title: "Labels",
+      rows: [
+        {
+          table: {
+            label: "Labels",
+            columns: ["Key", "Value"],
+            rows: [
+              ["app", "web"],
+              ["tier", "front"],
+            ],
+          },
+        },
+      ],
+    };
+    expect(sectionCount(labels)).toBe(2);
+  });
+
+  it("counts the conditions of a status section", () => {
+    const status: DetailSection = {
+      title: "Status",
+      rows: [
+        {
+          conditions: {
+            label: "Conditions",
+            conditions: [
+              { name: "Ready", status: "True", tone: "ok", reason: "", message: "", sinceSecs: 1 },
+            ],
+          },
+        },
+      ],
+    };
+    expect(sectionCount(status)).toBe(1);
+  });
+
+  it("counts the rows of a section that holds several", () => {
+    const object: DetailSection = {
+      title: "Object",
+      rows: [
+        { text: { label: "UID", value: "1" } },
+        { text: { label: "Resource version", value: "2" } },
+      ],
+    };
+    expect(sectionCount(object)).toBe(2);
+  });
+
+  it("counts the chips of a selector", () => {
+    const selector: DetailSection = {
+      title: "Service",
+      rows: [{ badges: { label: "Selector", items: ["app=web", "tier=front"] } }],
+    };
+    expect(sectionCount(selector)).toBe(2);
+  });
+
+  it("counts the ports a service exposes", () => {
+    const ports: DetailSection = {
+      title: "Service",
+      rows: [
+        {
+          ports: {
+            label: "Ports",
+            ports: [
+              { label: "http: 80/TCP", port: 80, proto: "TCP" },
+              { label: "9090/UDP", port: 9090, proto: "UDP" },
+            ],
+          },
+        },
+      ],
+    };
+    expect(sectionCount(ports)).toBe(2);
+  });
+});

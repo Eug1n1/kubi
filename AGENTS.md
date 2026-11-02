@@ -38,7 +38,7 @@ Rust is pinned in `rust-toolchain.toml` (1.95.0) and the core is
 
 ```
 crates/kubi-core/src/
-  engine.rs      5.2k lines: the event loop, every command handler, the watches,
+  engine.rs      7.6k lines: the event loop, every command handler, the watches,
                  logs, port forwards, execs, Argo, YAML and pod detail fetches
   model.rs       the wire protocol: Command, AppEvent, ResourceKind, WatchTarget
   rows.rs        turning Kubernetes objects into table rows
@@ -113,7 +113,9 @@ its URL query.
 
 **A cluster is named, never assumed.** Every command and every event that
 touches a cluster carries `context`. Engine state is per context: `clients`,
-`namespaces`, `watches`, `catalogs` and the Argo cache are all keyed by it. A
+`namespaces`, `watches`, `catalogs` and the Argo cache are all keyed by it —
+`live` is keyed by window *and* context, because two windows browse one cluster
+at once. A
 tab is matched to incoming rows by **(context, target)** — two `pods` watches
 from two clusters would otherwise land in one list. Commands that change the
 cluster (`delete`, `restart`, `apply`, `startLogs`, `startPortForward`,
@@ -125,6 +127,33 @@ watches, logs, forwards or execs — that is the whole point of the feature. Liv
 streams are keyed by id *and* remember their context (`LiveStream`, `ExecSlot`)
 so `Disconnect` stops only its own. When you add a stream, record the context
 with it, or the teardown will be wrong.
+
+**The detail panel follows the object through the list's watch.**
+`SelectObject` registers what a window is showing; the watch that lists the kind
+reads it on every change and emits `ObjectDetail` (and `PodContainers`) from the
+object it has just received, so keeping the panel current costs no request of
+its own. Four things about it are easy to break. The registration is keyed by
+**(window, context)** because two windows browse one cluster at once, and the
+emit is *not* window-addressed: each window matches it against its own selected
+uid. A change is emitted once per `resourceVersion`, because a watch that
+re-lists repeats versions the panel already has. The sources cache holds resolved
+Secret values, so it is dropped the moment no selection refers to it — unlike the
+registration, which is deliberately left behind, because a uid identifies one
+instance of an object and can never match again. That eagerness is why a pod
+selection whose sources have gone reads them again, containers only and never the
+YAML: the panel still holds the containers and re-registers without a read, so
+without the refill the card would freeze the first time another tab took the
+selection over. `read` on the command is the one read a selection needs, never a
+refresh: a tab coming back to the front registers without reading, which is what
+keeps an unsaved YAML draft. See
+`docs/adr/0003-detail-panel-follows-the-object.md`.
+
+**Related objects are read on demand, never on the watch.** `ObjectDetail` carries
+the relations as *queries* — deriving them is a function of the object, so it is
+free — and the rows behind them come from `FetchRelated`, capped at a hundred and
+answering `Show all` for one relation at a time. The panel owns the refresh
+cadence. A relation the cluster refuses says so inside its own block, never as a
+window banner. See `docs/adr/0004-related-objects-are-listed-by-the-engine.md`.
 
 **A context window is a main-like window pinned to one context.** It renders
 the same `App` with a `pinned` prop, filters broadcast events to its own
@@ -261,10 +290,11 @@ A new harness page is a few lines in the `pages` list at the bottom of
   a local `context` in the calling function is invisible inside the macro.
 - **The engine is one file and one `impl`.** Big on purpose: the commands are a
   flat `match` near the top and everything else is grouped by feature below it.
-  Follow that order rather than inventing a module for one function. Three
+  Follow that order rather than inventing a module for one function. Five
   functions carry `#[allow(clippy::too_many_arguments)]` — `start_forward`,
-  `start_logs`, `load_detail` — because the dispatch match hands a command's
-  fields over flat; grouping them into a request struct would move the same
+  `start_logs`, `load_detail`, `select_object` and `spawn_watch` — because the
+  dispatch match hands a command's fields over flat and the watch macros hand a
+  kind's hooks over flat; grouping them into a request struct would move the same
   fields one level down. The allow is a decision, not an oversight.
 - **serde's `camelCase` only lowercases the first letter.** `rename_all =
   "camelCase"` is not a word splitter: `BackendTLSPolicies` travels as
