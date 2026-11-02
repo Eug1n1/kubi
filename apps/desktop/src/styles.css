@@ -531,8 +531,10 @@ p,
   display: flex;
   align-items: stretch;
   gap: 2px;
-  padding: 0 var(--sp2);
-  overflow: auto;
+  /* The strip scrolls sideways, never down: the 1px bottom padding keeps the active tab
+     underline inside the scroll area, or a scroll container shows a scrollbar for it. */
+  padding: 0 var(--sp2) 1px;
+  overflow-x: auto;
   background: var(--bg-chrome);
   border-bottom: 1px solid var(--border);
 }
@@ -1520,10 +1522,11 @@ th.num, td.num {
   flex: none;
   display: flex;
   gap: 2px;
-  overflow: auto;
+  /* Same as `.tabs`: the 1px bottom padding keeps the underline inside the scroll area. */
+  padding: 0 var(--sp2) 1px;
+  overflow-x: auto;
   background: var(--bg-chrome);
   border-bottom: 1px solid var(--border);
-  padding: 0 var(--sp2);
 }
 .log-tab {
   display: flex;

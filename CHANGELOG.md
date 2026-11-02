@@ -58,6 +58,10 @@ shipped as.
   Finder instead of a terminal. A failed connect now also names the cluster
   it failed for.
 
+- The tab strip above an object list no longer shows a scrollbar down its side. The
+  1px that fed it was the bottom of the active tab's underline, which now draws its
+  full two pixels. The same for the log and exec tab strip.
+
 ## [0.3.2] - 2026-10-16
 
 ### Changed

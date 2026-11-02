@@ -9,11 +9,15 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ContextMenuBody, ContextRail } from "../src/contexts";
 import { About, Colors, SettingsModal, type AboutStatus } from "../src/settings";
 import { LogPane } from "../src/logWindow";
-import { ArgoScreen, Detail, OverviewScreen, PinnedSplash, ResourceScreen, SearchModal, Sidebar, TopBar } from "../src/screens";
+import { ArgoScreen, Detail, OverviewScreen, PinnedSplash, ResourceScreen, SearchModal, SessionDrawer, Sidebar, TopBar } from "../src/screens";
 import { DEFAULT_KEYMAP } from "../src/keymap";
 import { DEFAULT_THEME, BUILTIN_THEMES, themeTokens } from "../src/theme";
 import type { Kubi } from "../src/useKubi";
-import type { ClusterOverview, DetailSection, EventInfo, LogSnapshot, RelatedGroup, ResourceKind, ResourceRow, Tab } from "../src/types";
+import type { ClusterOverview, DetailSection, DockTab, EventInfo, LogSnapshot, RelatedGroup, ResourceKind, ResourceRow, Tab } from "../src/types";
+
+// `SessionDrawer` reads `window.innerHeight` while it renders and this harness runs in
+// Node: give it that one field. Harness chrome only — never shipped.
+(globalThis as { window?: { innerHeight: number } }).window ??= { innerHeight: 900 };
 
 const row = (
   uid: string,
@@ -588,6 +592,24 @@ const logs: LogSnapshot = {
   timestamps: true,
 };
 
+/** The dock's sessions as its tab strip holds them: two logs and an exec. */
+const dockTabs: DockTab[] = [
+  { ...logs, id: 1, label: "log-1", detached: false, pane: "log" },
+  { ...logs, id: 2, label: "log-2", detached: false, pane: "log", name: "grafana-deployment-85f7894766-qq7j4" },
+  {
+    pane: "exec",
+    id: 3,
+    label: "exec-1",
+    detached: false,
+    namespace: "grafana",
+    name: "tempo-querier-5f8d9c7b6-p4m2n",
+    containers: ["tempo", "istio-proxy"],
+    container: "tempo",
+    text: "",
+    closed: false,
+  },
+];
+
 const shell = (activeTab: Tab, rail = true) => {
   const kubi = kubiFor(activeTab);
   return `<div class="app${rail ? "" : " no-rail"}">${renderToStaticMarkup(<TopBar kubi={kubi} />)}${
@@ -783,6 +805,16 @@ const pages: [string, string, string?][] = [
     `<div class="log-drawer log-window" style="height:360px">${renderToStaticMarkup(
       <LogPane logs={logs} follow={1} onPod={noop} onContainer={noop} onPrevious={noop} onTimestamps={noop} onClose={noop} />,
     )}</div>`,
+  ],
+  [
+    "Dock — log and exec tabs",
+    renderToStaticMarkup(
+      <SessionDrawer
+        kubi={{ ...kubiFor(tab("overview", null)), dockTabs, activeDock: "log-1" }}
+        height={320}
+        onHeight={noop}
+      />,
+    ),
   ],
   [
     "Primitives",
